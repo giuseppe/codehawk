@@ -25,9 +25,9 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::fs;
 use std::time::Duration;
 use string_builder::Builder;
 
@@ -41,6 +41,7 @@ const MODEL: &str = "google/gemini-2.5-pro-preview-03-25";
 const MAX_TOKENS: u32 = 16384;
 const DEFAULT_DAYS: u64 = 7;
 
+/// Reads the OpenRouter API key from the file `~/.openrouter/key`.
 fn read_api_key() -> Result<String, Box<dyn Error>> {
     let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
     let key_path = home_dir.join(".openrouter").join("key");
@@ -82,6 +83,7 @@ struct Choice {
     message: Message,
 }
 
+/// Sends a POST request to the OpenRouter API with the given prompt and options.
 fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Box<dyn Error>> {
     let api_key = read_api_key()?;
 
@@ -122,6 +124,7 @@ fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Bo
     Ok(response)
 }
 
+/// Sends a prompt to the OpenRouter API and prints the AI's response to standard output.
 fn post_request_and_print_output(prompt: &String, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let response: OpenRouterResponse = open_router_post_request(&prompt, opts)?.json()?;
     let mut builder = Builder::default();
@@ -133,6 +136,7 @@ fn post_request_and_print_output(prompt: &String, opts: &Opts) -> Result<(), Box
     Ok(())
 }
 
+/// Fetches a GitHub pull request and its patch, then sends them to the AI for review.
 fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let pr = get_github_pull_request(repo, pr_id)?;
     let patch = get_github_pull_request_patch(repo, pr_id)?;
@@ -145,6 +149,7 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
     post_request_and_print_output(&prompt, opts)
 }
 
+/// Fetches a GitHub issue and its comments, then sends them to the AI for triaging.
 fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let issue = get_github_issue(repo, issue_id)?;
     let comments = get_github_issue_comments(repo, issue_id)?;
@@ -158,6 +163,7 @@ fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn
     post_request_and_print_output(&prompt, opts)
 }
 
+/// Fetches recent issues and pull requests from specified repositories and sends them to the AI with a given command prompt.
 fn prompt_issues_and_pull_requests(
     command: &str,
     repos: &Vec<String>,
@@ -193,6 +199,7 @@ fn prompt_issues_and_pull_requests(
     post_request_and_print_output(&prompt, opts)
 }
 
+/// Analyzes recent issues and pull requests for the specified repositories.
 fn analyze_repos(
     repos: &Vec<String>,
     days: Option<u64>,
@@ -206,6 +213,7 @@ fn analyze_repos(
     )
 }
 
+/// Prioritizes recent issues and pull requests for the specified repositories.
 fn prioritize_repos(
     repos: &Vec<String>,
     days: Option<u64>,
@@ -219,10 +227,8 @@ fn prioritize_repos(
     )
 }
 
-fn prompt(
-    files: &Vec<String>,
-    opts: &Opts
-) -> Result<(), Box<dyn Error>> {
+/// Sends the concatenated content of specified files as a prompt to the AI.
+fn prompt(files: &Vec<String>, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let mut builder = Builder::default();
 
     for file in files {
@@ -270,9 +276,7 @@ enum Command {
     Review { repo: String, pr: u64 },
 
     /// Pass a request to the AI model and print its response
-    Prompt {
-        files: Vec<String>,
-    }
+    Prompt { files: Vec<String> },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

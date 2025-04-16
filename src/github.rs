@@ -379,6 +379,7 @@ pub type Issues = Vec<Issue>;
 pub type PullRequests = Vec<PullRequest>;
 pub type Comments = Vec<Comment>;
 
+/// Makes a basic HTTP GET request to the specified URL.
 fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("codehawk"));
@@ -393,12 +394,14 @@ fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     Ok(response)
 }
 
+/// Makes an HTTP GET request to a standard GitHub URL (not the API).
 fn make_github_request(path: &String) -> Result<Response, Box<dyn Error>> {
     let url = format!("https://www.github.com/{}", path);
 
     make_request(&url)
 }
 
+/// Makes an HTTP GET request to the GitHub API.
 fn make_github_api_request(
     path: &String,
     query: Option<&String>,
@@ -411,6 +414,7 @@ fn make_github_api_request(
     make_request(&url)
 }
 
+/// Fetches issues from a GitHub repository that have been updated within the last `days`.
 pub fn get_github_issues(repo: &String, days: u64) -> Result<Issues, Box<dyn Error>> {
     let now = Utc::now();
     let since = now.checked_sub_days(Days::new(days)).unwrap();
@@ -424,6 +428,7 @@ pub fn get_github_issues(repo: &String, days: u64) -> Result<Issues, Box<dyn Err
     Ok(issues)
 }
 
+/// Fetches pull requests from a GitHub repository that have been updated within the last `days`.
 pub fn get_github_pull_requests(repo: &String, days: u64) -> Result<PullRequests, Box<dyn Error>> {
     let now = Utc::now();
     let since = now.checked_sub_days(Days::new(days)).unwrap();
@@ -437,6 +442,7 @@ pub fn get_github_pull_requests(repo: &String, days: u64) -> Result<PullRequests
     Ok(pull_requests)
 }
 
+/// Fetches detailed information for a specific pull request from a GitHub repository.
 pub fn get_github_pull_request(repo: &String, pr: u64) -> Result<PullRequest, Box<dyn Error>> {
     let path = format!("repos/{}/pulls/{}", repo, pr);
     let response = make_github_api_request(&path, None)?;
@@ -445,6 +451,7 @@ pub fn get_github_pull_request(repo: &String, pr: u64) -> Result<PullRequest, Bo
     Ok(pull_request)
 }
 
+/// Fetches the patch content for a specific pull request from a GitHub repository.
 pub fn get_github_pull_request_patch(repo: &String, pr: u64) -> Result<String, Box<dyn Error>> {
     let path = format!("{}/pull/{}.patch", repo, pr);
     let response = make_github_request(&path)?;
@@ -452,6 +459,7 @@ pub fn get_github_pull_request_patch(repo: &String, pr: u64) -> Result<String, B
     Ok(text)
 }
 
+/// Fetches detailed information for a specific issue from a GitHub repository.
 pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Error>> {
     let path = format!("repos/{}/issues/{}", repo, issue);
     let response = make_github_api_request(&path, None)?;
@@ -461,6 +469,7 @@ pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Erro
     Ok(issue)
 }
 
+/// Fetches all comments for a specific issue from a GitHub repository.
 pub fn get_github_issue_comments(repo: &String, issue: i64) -> Result<Comments, Box<dyn Error>> {
     let path = format!("repos/{}/issues/{}/comments", repo, issue);
     let response = make_github_api_request(&path, None)?;
