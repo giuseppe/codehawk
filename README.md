@@ -37,6 +37,28 @@ Example: Analyze issues and pull requests in `my-org/my-project` from the last 7
 codehawk analyze my-org/my-project
 ```
 
+### Prioritize recent issues and pull requests
+
+To get an AI-generated prioritization of issues and pull requests for more repositories within a specific timeframe (defaulting to the last 7 days):
+
+```bash
+codehawk prioritize [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
+
+--days <number_of_days>: Optional. Specifies the number of past days to fetch issues and pull requests from. Defaults to 7.
+
+<owner/repo>: The GitHub repository path(s) (e.g., rust-lang/rust). You can specify multiple repositories.
+```
+
+```
+codehawk prioritize --days 14 owner1/repoA owner2/repoB
+```
+
+Example: Prioritize issues and pull requests in `my-org/my-project` from the last 7 days (using default):
+
+```
+codehawk prioritize my-org/my-project
+```
+
 ### Triage a specific issue
 To get an AI-generated triage report, potentially including a minimal reproducer, for a specific issue:
 

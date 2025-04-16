@@ -144,7 +144,8 @@ fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn
     Ok(())
 }
 
-fn analyze_repos(
+fn prompt_issues_and_pull_requests(
+    command: &str,
     repos: &Vec<String>,
     days: Option<u64>,
     opts: &Opts,
@@ -173,10 +174,7 @@ fn analyze_repos(
         pull_requests: pull_requests,
     };
 
-    let prompt: String = format!(
-        "Provide a summary of all the issues and pull requests listed, highlighting the most important ones\n{}",
-        serde_json::to_string(&prompt_body)?
-    );
+    let prompt: String = format!("{}\n{}", command, serde_json::to_string(&prompt_body)?);
     let response = open_router_post_request(&prompt, opts)?;
     if !response.status().is_success() {
         eprintln!(
@@ -199,6 +197,32 @@ fn analyze_repos(
     Ok(())
 }
 
+fn analyze_repos(
+    repos: &Vec<String>,
+    days: Option<u64>,
+    opts: &Opts,
+) -> Result<(), Box<dyn Error>> {
+    prompt_issues_and_pull_requests(
+        "Provide a summary of all the issues and pull requests listed, highlighting the most important ones\n",
+        repos,
+        days,
+        opts,
+    )
+}
+
+fn prioritize_repos(
+    repos: &Vec<String>,
+    days: Option<u64>,
+    opts: &Opts,
+) -> Result<(), Box<dyn Error>> {
+    prompt_issues_and_pull_requests(
+        "Given the issues and pull requests listed, order them by importance and highlight the ones I must address first and why\n",
+        repos,
+        days,
+        opts,
+    )
+}
+
 #[derive(Parser, Debug)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
@@ -216,6 +240,12 @@ struct Opts {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Prioritize the issues and pull requests happened in the last DAYS
+    Prioritize {
+        #[clap(long)]
+        days: Option<u64>,
+        repo: Vec<String>,
+    },
     /// Analyze the issues and pull requests happened in the last DAYS
     Analyze {
         #[clap(long)]
@@ -230,6 +260,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opts = Opts::parse();
     match opts.command {
         Command::Analyze { days, ref repo } => analyze_repos(&repo, days, &opts)?,
+        Command::Prioritize { days, ref repo } => prioritize_repos(&repo, days, &opts)?,
         Command::Triage { ref repo, issue } => triage_issue(&repo, issue, &opts)?,
     }
     Ok(())
