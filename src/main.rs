@@ -30,7 +30,10 @@ use std::io::Read;
 use std::time::Duration;
 use string_builder::Builder;
 
-use github::{Issues, get_all_github_issues, get_github_issue, get_github_issue_comments};
+use github::{
+    Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
+    get_github_pull_requests,
+};
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const MODEL: &str = "google/gemini-2.5-pro-preview-03-25";
@@ -149,14 +152,30 @@ fn analyze_repos(
     let days = days.unwrap_or_else(|| DEFAULT_DAYS);
 
     let mut issues: Issues = Issues::new();
+    let mut pull_requests: PullRequests = PullRequests::new();
     for repo in repos {
-        let mut repo_issues = get_all_github_issues(repo, days)?;
+        let mut repo_issues = get_github_issues(repo, days)?;
         issues.append(&mut repo_issues);
+
+        let mut repo_pull_requests = get_github_pull_requests(repo, days)?;
+        pull_requests.append(&mut repo_pull_requests);
     }
 
+    #[derive(Serialize)]
+    #[serde(rename_all = "snake_case")]
+    struct PromptBody {
+        issues: Issues,
+        pull_requests: PullRequests,
+    }
+
+    let prompt_body = PromptBody {
+        issues: issues,
+        pull_requests: pull_requests,
+    };
+
     let prompt: String = format!(
-        "Provide a summary of all the issues listed, highlighting the most important ones\n{}",
-        serde_json::to_string(&issues)?
+        "Provide a summary of all the issues and pull requests listed, highlighting the most important ones\n{}",
+        serde_json::to_string(&prompt_body)?
     );
     let response = open_router_post_request(&prompt, opts)?;
     if !response.status().is_success() {
@@ -197,7 +216,7 @@ struct Opts {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Analyze the issues happened in the last DAYS
+    /// Analyze the issues and pull requests happened in the last DAYS
     Analyze {
         #[clap(long)]
         days: Option<u64>,

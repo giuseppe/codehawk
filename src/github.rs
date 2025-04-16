@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use std::error::Error;
 
-use chrono::{Utc, SecondsFormat, Days};
+use chrono::{Days, SecondsFormat, Utc};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::USER_AGENT;
 
@@ -156,7 +156,7 @@ pub struct Reactions {
     pub eyes: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PullRequest {
     pub url: String,
@@ -164,13 +164,225 @@ pub struct PullRequest {
     pub diff_url: String,
     pub patch_url: String,
     pub merged_at: Option<String>,
+
+    pub id: Option<u64>,
+    pub node_id: Option<String>,
+    pub issue_url: Option<String>,
+    pub number: Option<u32>,
+    pub state: Option<String>,
+    pub locked: Option<bool>,
+    pub title: Option<String>,
+    pub user: Option<User>,
+    pub body: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub merge_commit_sha: Option<String>,
+    pub assignee: Option<User>,
+    pub assignees: Option<Vec<User>>,
+    pub requested_reviewers: Option<Vec<User>>,
+    pub requested_teams: Option<Vec<Team>>,
+    pub labels: Option<Vec<Label>>,
+    pub milestone: Option<Milestone>,
+    pub draft: Option<bool>,
+    pub commits_url: Option<String>,
+    pub review_comments_url: Option<String>,
+    pub review_comment_url: Option<String>,
+    pub comments_url: Option<String>,
+    pub statuses_url: Option<String>,
+    pub head: Option<RepoRef>,
+    pub base: Option<RepoRef>,
+    #[serde(rename = "_links")]
+    pub links: Option<Links>,
+    pub author_association: Option<String>,
+    pub auto_merge: Option<bool>,
+    pub active_lock_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Team {
+    pub id: Option<String>,
+    pub node_id: Option<String>,
+    pub url: Option<String>,
+    pub html_url: Option<String>,
+    pub name: Option<String>,
+    pub slug: Option<String>,
+    pub description: Option<String>,
+    pub privacy: Option<String>,
+    pub notication_setting: Option<String>,
+    pub permission: Option<String>,
+    pub members_url: Option<String>,
+    pub repositories_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Label {
+    pub id: u64,
+    pub node_id: String,
+    pub url: String,
+    pub name: String,
+    pub color: String,
+    pub default: bool,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Milestone {
+    pub url: String,
+    pub html_url: String,
+    pub labels_url: String,
+    pub id: u64,
+    pub node_id: String,
+    pub number: u32,
+    pub state: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub creator: User,
+    pub open_issues: u32,
+    pub closed_issues: u32,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub due_on: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RepoRef {
+    pub label: Option<String>,
+    pub ref_field: Option<String>,
+    #[serde(rename = "ref")]
+    pub sha: Option<String>,
+    pub user: Option<User>,
+    pub repo: Option<Repository>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Repository {
+    pub id: u64,
+    pub node_id: Option<String>,
+    pub name: Option<String>,
+    pub full_name: Option<String>,
+    pub private: bool,
+    pub owner: User,
+    pub html_url: Option<String>,
+    pub description: Option<String>,
+    pub fork: bool,
+    pub url: Option<String>,
+    pub forks_url: Option<String>,
+    pub keys_url: Option<String>,
+    pub collaborators_url: Option<String>,
+    pub teams_url: Option<String>,
+    pub hooks_url: Option<String>,
+    pub issue_events_url: Option<String>,
+    pub events_url: Option<String>,
+    pub assignees_url: Option<String>,
+    pub branches_url: Option<String>,
+    pub tags_url: Option<String>,
+    pub blobs_url: Option<String>,
+    pub git_tags_url: Option<String>,
+    pub git_refs_url: Option<String>,
+    pub trees_url: Option<String>,
+    pub statuses_url: Option<String>,
+    pub languages_url: Option<String>,
+    pub stargazers_url: Option<String>,
+    pub contributors_url: Option<String>,
+    pub subscribers_url: Option<String>,
+    pub subscription_url: Option<String>,
+    pub commits_url: Option<String>,
+    pub git_commits_url: Option<String>,
+    pub comments_url: Option<String>,
+    pub issue_comment_url: Option<String>,
+    pub contents_url: Option<String>,
+    pub compare_url: Option<String>,
+    pub merges_url: Option<String>,
+    pub archive_url: Option<String>,
+    pub downloads_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub pulls_url: Option<String>,
+    pub milestones_url: Option<String>,
+    pub notifications_url: Option<String>,
+    pub labels_url: Option<String>,
+    pub releases_url: Option<String>,
+    pub deployments_url: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub pushed_at: Option<String>,
+    pub git_url: Option<String>,
+    pub ssh_url: Option<String>,
+    pub clone_url: Option<String>,
+    pub svn_url: Option<String>,
+    pub homepage: Option<String>,
+    pub size: u64,
+    pub stargazers_count: u64,
+    pub watchers_count: u64,
+    pub language: Option<String>,
+    pub has_issues: bool,
+    pub has_projects: bool,
+    pub has_downloads: bool,
+    pub has_wiki: bool,
+    pub has_pages: bool,
+    pub has_discussions: bool,
+    pub forks_count: u64,
+    pub mirror_url: Option<String>,
+    pub archived: bool,
+    pub disabled: bool,
+    pub open_issues_count: u64,
+    pub license: Option<License>,
+    pub allow_forking: bool,
+    pub is_template: bool,
+    pub web_commit_signoff_required: bool,
+    pub topics: Vec<String>,
+    pub visibility: Option<String>,
+    pub forks: u64,
+    pub open_issues: u64,
+    pub watchers: u64,
+    pub default_branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct License {
+    pub key: Option<String>,
+    pub name: Option<String>,
+    pub pdx_id: Option<String>,
+    pub url: Option<String>,
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Links {
+    #[serde(rename = "self")]
+    pub self_link: Link,
+    pub html: Link,
+    pub issue: Link,
+    pub comments: Link,
+    pub review_comments: Link,
+    pub review_comment: Link,
+    pub commits: Link,
+    pub statuses: Link,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Link {
+    pub href: String,
 }
 
 // Top-level
 pub type Issues = Vec<Issue>;
+pub type PullRequests = Vec<PullRequest>;
 pub type Comments = Vec<Comment>;
 
-fn make_github_api_request(path: &String, query: Option<&String>) -> Result<Response, Box<dyn Error>> {
+fn make_github_api_request(
+    path: &String,
+    query: Option<&String>,
+) -> Result<Response, Box<dyn Error>> {
     let url = match query {
         Some(query) => format!("https://api.github.com/{}?{}", path, query),
         None => format!("https://api.github.com/{}", path),
@@ -189,10 +401,7 @@ fn make_github_api_request(path: &String, query: Option<&String>) -> Result<Resp
     Ok(response)
 }
 
-pub fn get_all_github_issues(
-    repo: &String,
-    days: u64,
-) -> Result<Issues, Box<dyn Error>> {
+pub fn get_github_issues(repo: &String, days: u64) -> Result<Issues, Box<dyn Error>> {
     let now = Utc::now();
     let since = now.checked_sub_days(Days::new(days)).unwrap();
     let query = format!("since={}", since.to_rfc3339_opts(SecondsFormat::Secs, true));
@@ -203,6 +412,19 @@ pub fn get_all_github_issues(
     let issues = serde_json::from_str::<Issues>(&text)?;
 
     Ok(issues)
+}
+
+pub fn get_github_pull_requests(repo: &String, days: u64) -> Result<PullRequests, Box<dyn Error>> {
+    let now = Utc::now();
+    let since = now.checked_sub_days(Days::new(days)).unwrap();
+    let query = format!("since={}", since.to_rfc3339_opts(SecondsFormat::Secs, true));
+
+    let path = format!("repos/{}/pulls", repo);
+    let response = make_github_api_request(&path, Some(&query))?;
+    let text = response.text()?;
+    let pull_requests = serde_json::from_str::<PullRequests>(&text)?;
+
+    Ok(pull_requests)
 }
 
 pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Error>> {
