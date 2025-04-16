@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::fs;
 use std::time::Duration;
 use string_builder::Builder;
 
@@ -218,6 +219,21 @@ fn prioritize_repos(
     )
 }
 
+fn prompt(
+    files: &Vec<String>,
+    opts: &Opts
+) -> Result<(), Box<dyn Error>> {
+    let mut builder = Builder::default();
+
+    for file in files {
+        let contents = fs::read_to_string(file)?;
+        builder.append(contents);
+    }
+
+    let msg = builder.string()?;
+    post_request_and_print_output(&msg, opts)
+}
+
 #[derive(Parser, Debug)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
@@ -252,6 +268,11 @@ enum Command {
 
     /// Review a pull request
     Review { repo: String, pr: u64 },
+
+    /// Pass a request to the AI model and print its response
+    Prompt {
+        files: Vec<String>,
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -261,6 +282,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Prioritize { days, ref repo } => prioritize_repos(&repo, days, &opts)?,
         Command::Triage { ref repo, issue } => triage_issue(&repo, issue, &opts)?,
         Command::Review { ref repo, pr } => review_pull_request(&repo, pr, &opts)?,
+        Command::Prompt { ref files } => prompt(&files, &opts)?,
     }
     Ok(())
 }

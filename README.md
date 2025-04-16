@@ -82,5 +82,13 @@ You can customize the AI interaction using global options placed before the comm
 --max-tokens <number>: Set the maximum number of tokens for the AI's response (Default: 16384).
 ```
 
+### Use a raw query
+
+```
+codehawk prompt file1 [file2 ....]
+```
+
+It allows to pas a raw request to the AI model.
+
 ## License
 codehawk is licensed under the GNU General Public License v2.0 or later.
