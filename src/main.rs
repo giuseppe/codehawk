@@ -109,7 +109,27 @@ fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Bo
         .headers(headers)
         .json(&request_body)
         .send()?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "got error code: {}: {}",
+            response.status(),
+            response.text()?
+        )
+        .into());
+    }
     Ok(response)
+}
+
+fn post_request_and_print_output(prompt: &String, opts: &Opts) -> Result<(), Box<dyn Error>> {
+    let response: OpenRouterResponse = open_router_post_request(&prompt, opts)?.json()?;
+    let mut builder = Builder::default();
+    for choice in response.choices {
+        builder.append(choice.message.content);
+    }
+    let msg = builder.string()?;
+    println!("{}", &msg);
+    Ok(())
 }
 
 fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
@@ -121,27 +141,7 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
         patch,
         serde_json::to_string(&pr)?
     );
-
-    let response = open_router_post_request(&prompt, opts)?;
-    if !response.status().is_success() {
-        eprintln!(
-            "Got Error Code: {}: {}",
-            response.status(),
-            response.text()?
-        );
-    } else {
-        let response: OpenRouterResponse = response.json()?;
-
-        let mut builder = Builder::default();
-
-        for choice in response.choices {
-            builder.append(choice.message.content);
-        }
-        let msg = builder.string()?;
-        println!("{}", &msg);
-    }
-
-    Ok(())
+    post_request_and_print_output(&prompt, opts)
 }
 
 fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn Error>> {
@@ -154,26 +154,7 @@ fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn
         serde_json::to_string(&comments)?,
     );
 
-    let response = open_router_post_request(&prompt, opts)?;
-    if !response.status().is_success() {
-        eprintln!(
-            "Got Error Code: {}: {}",
-            response.status(),
-            response.text()?
-        );
-    } else {
-        let response: OpenRouterResponse = response.json()?;
-
-        let mut builder = Builder::default();
-
-        for choice in response.choices {
-            builder.append(choice.message.content);
-        }
-        let msg = builder.string()?;
-        println!("{}", &msg);
-    }
-
-    Ok(())
+    post_request_and_print_output(&prompt, opts)
 }
 
 fn prompt_issues_and_pull_requests(
@@ -207,26 +188,8 @@ fn prompt_issues_and_pull_requests(
     };
 
     let prompt: String = format!("{}\n{}", command, serde_json::to_string(&prompt_body)?);
-    let response = open_router_post_request(&prompt, opts)?;
-    if !response.status().is_success() {
-        eprintln!(
-            "Got Error Code: {}: {}",
-            response.status(),
-            response.text()?
-        );
-    } else {
-        let response: OpenRouterResponse = response.json()?;
 
-        let mut builder = Builder::default();
-
-        for choice in response.choices {
-            builder.append(choice.message.content);
-        }
-        let msg = builder.string()?;
-        println!("{}", &msg);
-    }
-
-    Ok(())
+    post_request_and_print_output(&prompt, opts)
 }
 
 fn analyze_repos(
