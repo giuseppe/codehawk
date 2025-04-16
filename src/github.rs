@@ -379,15 +379,7 @@ pub type Issues = Vec<Issue>;
 pub type PullRequests = Vec<PullRequest>;
 pub type Comments = Vec<Comment>;
 
-fn make_github_api_request(
-    path: &String,
-    query: Option<&String>,
-) -> Result<Response, Box<dyn Error>> {
-    let url = match query {
-        Some(query) => format!("https://api.github.com/{}?{}", path, query),
-        None => format!("https://api.github.com/{}", path),
-    };
-
+fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("codehawk"));
 
@@ -399,6 +391,24 @@ fn make_github_api_request(
         .error_for_status()?;
 
     Ok(response)
+}
+
+fn make_github_request(path: &String) -> Result<Response, Box<dyn Error>> {
+    let url = format!("https://www.github.com/{}", path);
+
+    make_request(&url)
+}
+
+fn make_github_api_request(
+    path: &String,
+    query: Option<&String>,
+) -> Result<Response, Box<dyn Error>> {
+    let url = match query {
+        Some(query) => format!("https://api.github.com/{}?{}", path, query),
+        None => format!("https://api.github.com/{}", path),
+    };
+
+    make_request(&url)
 }
 
 pub fn get_github_issues(repo: &String, days: u64) -> Result<Issues, Box<dyn Error>> {
@@ -425,6 +435,21 @@ pub fn get_github_pull_requests(repo: &String, days: u64) -> Result<PullRequests
     let pull_requests = serde_json::from_str::<PullRequests>(&text)?;
 
     Ok(pull_requests)
+}
+
+pub fn get_github_pull_request(repo: &String, pr: u64) -> Result<PullRequest, Box<dyn Error>> {
+    let path = format!("repos/{}/pulls/{}", repo, pr);
+    let response = make_github_api_request(&path, None)?;
+    let text = response.text()?;
+    let pull_request = serde_json::from_str::<PullRequest>(&text)?;
+    Ok(pull_request)
+}
+
+pub fn get_github_pull_request_patch(repo: &String, pr: u64) -> Result<String, Box<dyn Error>> {
+    let path = format!("{}/pull/{}.patch", repo, pr);
+    let response = make_github_request(&path)?;
+    let text = response.text()?;
+    Ok(text)
 }
 
 pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Error>> {

@@ -32,7 +32,7 @@ use string_builder::Builder;
 
 use github::{
     Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
-    get_github_pull_requests,
+    get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -110,6 +110,38 @@ fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Bo
         .json(&request_body)
         .send()?;
     Ok(response)
+}
+
+fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
+    let pr = get_github_pull_request(repo, pr_id)?;
+    let patch = get_github_pull_request_patch(repo, pr_id)?;
+
+    let prompt: String = format!(
+        "Review the following pull request and report any issue with it, pay attention to the code.  Report only what is wrong, don't highlight what is done correctly.  The pull request information will follow after the @EOM@ string\n{} @EOM@ {}",
+        patch,
+        serde_json::to_string(&pr)?
+    );
+
+    let response = open_router_post_request(&prompt, opts)?;
+    if !response.status().is_success() {
+        eprintln!(
+            "Got Error Code: {}: {}",
+            response.status(),
+            response.text()?
+        );
+    } else {
+        let response: OpenRouterResponse = response.json()?;
+
+        let mut builder = Builder::default();
+
+        for choice in response.choices {
+            builder.append(choice.message.content);
+        }
+        let msg = builder.string()?;
+        println!("{}", &msg);
+    }
+
+    Ok(())
 }
 
 fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn Error>> {
@@ -254,6 +286,9 @@ enum Command {
     },
     /// Triage a specific issue
     Triage { repo: String, issue: i64 },
+
+    /// Review a pull request
+    Review { repo: String, pr: u64 },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -262,6 +297,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Analyze { days, ref repo } => analyze_repos(&repo, days, &opts)?,
         Command::Prioritize { days, ref repo } => prioritize_repos(&repo, days, &opts)?,
         Command::Triage { ref repo, issue } => triage_issue(&repo, issue, &opts)?,
+        Command::Review { ref repo, pr } => review_pull_request(&repo, pr, &opts)?,
     }
     Ok(())
 }

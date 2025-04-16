@@ -66,6 +66,13 @@ To get an AI-generated triage report, potentially including a minimal reproducer
 codehawk triage <owner/repo> <issue_number>
 ```
 
+### Review a pull request
+To get a review for a pull request
+
+```
+codehawk review <owner/repo> <pull_request_number>
+```
+
 ## Options
 You can customize the AI interaction using global options placed before the command (analyze or triage):
 
