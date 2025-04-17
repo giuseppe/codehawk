@@ -460,7 +460,7 @@ pub fn get_github_pull_request_patch(repo: &String, pr: u64) -> Result<String, B
 }
 
 /// Fetches detailed information for a specific issue from a GitHub repository.
-pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Error>> {
+pub fn get_github_issue(repo: &String, issue: u64) -> Result<Issue, Box<dyn Error>> {
     let path = format!("repos/{}/issues/{}", repo, issue);
     let response = make_github_api_request(&path, None)?;
 
@@ -470,7 +470,7 @@ pub fn get_github_issue(repo: &String, issue: i64) -> Result<Issue, Box<dyn Erro
 }
 
 /// Fetches all comments for a specific issue from a GitHub repository.
-pub fn get_github_issue_comments(repo: &String, issue: i64) -> Result<Comments, Box<dyn Error>> {
+pub fn get_github_issue_comments(repo: &String, issue: u64) -> Result<Comments, Box<dyn Error>> {
     let path = format!("repos/{}/issues/{}/comments", repo, issue);
     let response = make_github_api_request(&path, None)?;
 

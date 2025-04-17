@@ -150,7 +150,7 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
 }
 
 /// Fetches a GitHub issue and its comments, then sends them to the AI for triaging.
-fn triage_issue(repo: &String, issue_id: i64, opts: &Opts) -> Result<(), Box<dyn Error>> {
+fn triage_issue(repo: &String, issue_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let issue = get_github_issue(repo, issue_id)?;
     let comments = get_github_issue_comments(repo, issue_id)?;
 
@@ -270,7 +270,7 @@ enum Command {
         repo: Vec<String>,
     },
     /// Triage a specific issue
-    Triage { repo: String, issue: i64 },
+    Triage { repo: String, issue: u64 },
 
     /// Review a pull request
     Review { repo: String, pr: u64 },
