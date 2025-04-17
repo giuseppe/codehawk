@@ -268,21 +268,35 @@ struct Opts {
 enum Command {
     /// Prioritize the issues and pull requests happened in the last DAYS
     Prioritize {
+        /// Maximum age in days for the issue or pull request
         #[clap(long)]
         days: Option<u64>,
+        /// Repository
         repo: Vec<String>,
     },
     /// Analyze the issues and pull requests happened in the last DAYS
     Analyze {
+        /// Maximum age in days for the issue or pull request
         #[clap(long)]
         days: Option<u64>,
+        /// Repository
         repo: Vec<String>,
     },
     /// Triage a specific issue
-    Triage { repo: String, issue: u64 },
+    Triage {
+        /// Repository
+        repo: String,
+        /// Issue number
+        issue: u64,
+    },
 
     /// Review a pull request
-    Review { repo: String, pr: u64 },
+    Review {
+        /// Repository
+        repo: String,
+        /// PR number
+        pr: u64,
+    },
 
     /// Pass a request to the AI model and print its response
     Prompt {
