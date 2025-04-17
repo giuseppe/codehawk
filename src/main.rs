@@ -84,7 +84,11 @@ struct Choice {
 }
 
 /// Sends a POST request to the OpenRouter API with the given prompt and options.
-fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Box<dyn Error>> {
+fn open_router_post_request(
+    system_prompts: Option<Vec<String>>,
+    prompt: &String,
+    opts: &Opts,
+) -> Result<Response, Box<dyn Error>> {
     let api_key = read_api_key()?;
 
     let bearer_auth = format!("Bearer {}", &api_key);
@@ -98,14 +102,27 @@ fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Bo
         None => MODEL.to_string(),
     };
 
+    let mut messages: Vec<Message> = vec![];
+
+    if let Some(system_prompts) = system_prompts {
+        for system_prompt in system_prompts {
+            messages.push(Message {
+                role: "system".to_string(),
+                content: system_prompt,
+            });
+        }
+    }
+    messages.push(Message {
+        role: "user".to_string(),
+        content: prompt.to_string(),
+    });
+
     let request_body = OpenRouterRequest {
         model: model,
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
-        messages: vec![Message {
-            role: "user".to_string(),
-            content: prompt.to_string(),
-        }],
+        messages: messages,
     };
+
     let response = Client::new()
         .post(OPEN_ROUTER_URL)
         .timeout(Duration::from_secs(1000))
@@ -125,8 +142,13 @@ fn open_router_post_request(prompt: &String, opts: &Opts) -> Result<Response, Bo
 }
 
 /// Sends a prompt to the OpenRouter API and prints the AI's response to standard output.
-fn post_request_and_print_output(prompt: &String, opts: &Opts) -> Result<(), Box<dyn Error>> {
-    let response: OpenRouterResponse = open_router_post_request(&prompt, opts)?.json()?;
+fn post_request_and_print_output(
+    system_prompts: Option<Vec<String>>,
+    prompt: &String,
+    opts: &Opts,
+) -> Result<(), Box<dyn Error>> {
+    let response: OpenRouterResponse =
+        open_router_post_request(system_prompts, &prompt, opts)?.json()?;
     let mut builder = Builder::default();
     for choice in response.choices {
         builder.append(choice.message.content);
@@ -141,37 +163,34 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
     let pr = get_github_pull_request(repo, pr_id)?;
     let patch = get_github_pull_request_patch(repo, pr_id)?;
 
-    let prompt: String = format!(
-        "Review the following pull request and report any issue with it, pay attention to the code.  Report only what is wrong, don't highlight what is done correctly.  The pull request information will follow after the @EOM@ string\n{} @EOM@ {}",
-        patch,
-        serde_json::to_string(&pr)?
-    );
-    post_request_and_print_output(&prompt, opts)
+    let system_prompts: Vec<String> = vec![patch, serde_json::to_string(&pr)?];
+    let prompt = "Review the following pull request and report any issue with it, pay attention to the code.  Report only what is wrong, don't highlight what is done correctly.".to_string();
+
+    post_request_and_print_output(Some(system_prompts), &prompt, opts)
 }
 
 /// Fetches a GitHub issue and its comments, then sends them to the AI for triaging.
 fn triage_issue(repo: &String, issue_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let issue = get_github_issue(repo, issue_id)?;
     let comments = get_github_issue_comments(repo, issue_id)?;
+    let prompt = "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run it.".to_string();
 
-    let prompt: String = format!(
-        "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run it.  The comments will follow after the @EOM@ string {} @EOM@ {}",
+    let system_prompts: Vec<String> = vec![
         serde_json::to_string(&issue)?,
         serde_json::to_string(&comments)?,
-    );
+    ];
 
-    post_request_and_print_output(&prompt, opts)
+    post_request_and_print_output(Some(system_prompts), &prompt, opts)
 }
 
 /// Fetches recent issues and pull requests from specified repositories and sends them to the AI with a given command prompt.
 fn prompt_issues_and_pull_requests(
-    command: &str,
+    prompt: &str,
     repos: &Vec<String>,
     days: Option<u64>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
     let days = days.unwrap_or_else(|| DEFAULT_DAYS);
-
     let mut issues: Issues = Issues::new();
     let mut pull_requests: PullRequests = PullRequests::new();
     for repo in repos {
@@ -181,22 +200,13 @@ fn prompt_issues_and_pull_requests(
         let mut repo_pull_requests = get_github_pull_requests(repo, days)?;
         pull_requests.append(&mut repo_pull_requests);
     }
+    let system_prompts: Vec<String> = vec![
+        serde_json::to_string(&issues)?,
+        serde_json::to_string(&pull_requests)?,
+    ];
 
-    #[derive(Serialize)]
-    #[serde(rename_all = "snake_case")]
-    struct PromptBody {
-        issues: Issues,
-        pull_requests: PullRequests,
-    }
-
-    let prompt_body = PromptBody {
-        issues: issues,
-        pull_requests: pull_requests,
-    };
-
-    let prompt: String = format!("{}\n{}", command, serde_json::to_string(&prompt_body)?);
-
-    post_request_and_print_output(&prompt, opts)
+    let prompt = prompt.to_string();
+    post_request_and_print_output(Some(system_prompts), &prompt, opts)
 }
 
 /// Analyzes recent issues and pull requests for the specified repositories.
@@ -237,7 +247,7 @@ fn prompt(files: &Vec<String>, opts: &Opts) -> Result<(), Box<dyn Error>> {
     }
 
     let msg = builder.string()?;
-    post_request_and_print_output(&msg, opts)
+    post_request_and_print_output(None, &msg, opts)
 }
 
 #[derive(Parser, Debug)]
