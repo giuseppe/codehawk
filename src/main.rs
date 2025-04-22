@@ -21,9 +21,10 @@ mod github;
 
 use clap::{Parser, Subcommand};
 use dirs;
-use reqwest::blocking::{Client, Response};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::fs::File;
@@ -32,8 +33,8 @@ use std::time::Duration;
 use string_builder::Builder;
 
 use github::{
-    Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
-    get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
+    get_github_issue, get_github_issue_comments, get_github_issues, get_github_pull_request,
+    get_github_pull_request_patch, get_github_pull_requests, Issues, PullRequests,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -60,35 +61,125 @@ fn read_api_key() -> Result<String, Box<dyn Error>> {
     Ok(api_key)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
+struct ParameterProperty {
+    #[serde(rename = "type")]
+    param_type: String,
+    description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ToolParameters {
+    #[serde(rename = "type")]
+    param_type: String,
+    properties: HashMap<String, ParameterProperty>,
+    required: Vec<String>,
+
+    #[serde(rename = "additionalProperties")]
+    additional_properties: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Function {
+    name: String,
+    description: String,
+    parameters: ToolParameters,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Tool {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: Function,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct FunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ToolCall {
+    index: u64,
+    id: String,
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: FunctionCall,
+}
+
+#[derive(Serialize, Debug)]
 struct OpenRouterRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<Message>,
+    tools: Vec<Tool>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct Message {
     role: String,
     content: String,
+    tool_call_id: Option<String>,
+    name: Option<String>,
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct OpenRouterResponse {
-    choices: Vec<Choice>,
+    choices: Option<Vec<Choice>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Choice {
     message: Message,
+    finish_reason: String,
+}
+
+/// List of supported tools, must be in sync with `tool_call`.  It must be something like:
+// {
+//     "type": "function",
+//     "function": {
+//         "name": "get_weather",
+//         "description": "Get current temperature for a given location.",
+//         "parameters": {
+//             "type": "object",
+//             "properties": {
+//                 "location": {
+//                     "type": "string",
+//                     "description": "City and country e.g. Bogotá, Colombia"
+//                 }
+//             },
+//             "required": [
+//                 "location"
+//             ],
+//             "additionalProperties": false
+//         }
+//     }
+// }
+const TOOLS_DATA: &str = r#"
+    []
+    "#;
+
+/// Perform a tool call and return the message to send back.
+fn tool_call(req: &ToolCall) -> Result<Message, Box<dyn Error>> {
+    let msg = Message {
+        role: "tool".to_string(),
+        content: "".to_string(),
+        tool_call_id: Some(req.id.clone()),
+        name: Some(req.function.name.clone()),
+        tool_calls: None,
+    };
+    Ok(msg)
 }
 
 /// Sends a POST request to the OpenRouter API with the given prompt and options.
 fn open_router_post_request(
-    system_prompts: Option<Vec<String>>,
     prompt: &String,
+    system_prompts: Option<Vec<String>>,
+    other_messages: Option<Vec<Message>>,
     opts: &Opts,
-) -> Result<Response, Box<dyn Error>> {
+) -> Result<OpenRouterResponse, Box<dyn Error>> {
     let api_key = read_api_key()?;
 
     let bearer_auth = format!("Bearer {}", &api_key);
@@ -102,25 +193,40 @@ fn open_router_post_request(
         None => MODEL.to_string(),
     };
 
+    let tools: Vec<Tool> = serde_json::from_str::<Vec<Tool>>(&TOOLS_DATA)?;
+
     let mut messages: Vec<Message> = vec![];
 
-    if let Some(system_prompts) = system_prompts {
+    if let Some(system_prompts) = &system_prompts {
         for system_prompt in system_prompts {
             messages.push(Message {
                 role: "system".to_string(),
-                content: system_prompt,
+                content: system_prompt.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
             });
         }
     }
     messages.push(Message {
         role: "user".to_string(),
         content: prompt.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
     });
+
+    if let Some(other_messages) = &other_messages {
+        for msg in other_messages {
+            messages.push(msg.clone());
+        }
+    }
 
     let request_body = OpenRouterRequest {
         model: model,
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
         messages: messages,
+        tools: tools,
     };
 
     let response = Client::new()
@@ -138,20 +244,50 @@ fn open_router_post_request(
         )
         .into());
     }
-    Ok(response)
+
+    let open_router_response: OpenRouterResponse = response.json()?;
+
+    let mut tool_call_messages: Vec<Message> = vec![];
+    if let Some(choices) = &open_router_response.choices {
+        for choice in choices {
+            if choice.finish_reason == "tool_calls" {
+                let tool_calls = choice
+                    .message
+                    .tool_calls
+                    .as_ref()
+                    .ok_or("Invalid response")?;
+                tool_call_messages.push(choice.message.clone());
+                for tool_call_request in tool_calls {
+                    let msg = tool_call(tool_call_request)?;
+                    tool_call_messages.push(msg);
+                }
+            }
+        }
+    }
+    // If there were tool requests, repeat the request with the new results
+    if tool_call_messages.len() > 0 {
+        if let Some(mut other_messages) = other_messages {
+            tool_call_messages.append(&mut other_messages);
+        }
+
+        return open_router_post_request(&prompt, system_prompts, Some(tool_call_messages), &opts);
+    }
+    Ok(open_router_response)
 }
 
 /// Sends a prompt to the OpenRouter API and prints the AI's response to standard output.
 fn post_request_and_print_output(
-    system_prompts: Option<Vec<String>>,
     prompt: &String,
+    system_prompts: Option<Vec<String>>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
     let response: OpenRouterResponse =
-        open_router_post_request(system_prompts, &prompt, opts)?.json()?;
+        open_router_post_request(&prompt, system_prompts, None, opts)?;
     let mut builder = Builder::default();
-    for choice in response.choices {
-        builder.append(choice.message.content);
+    if let Some(choices) = response.choices {
+        for choice in choices {
+            builder.append(choice.message.content);
+        }
     }
     let msg = builder.string()?;
     println!("{}", &msg);
@@ -166,21 +302,22 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
     let system_prompts: Vec<String> = vec![patch, serde_json::to_string(&pr)?];
     let prompt = "Review the following pull request and report any issue with it, pay attention to the code.  Report only what is wrong, don't highlight what is done correctly.".to_string();
 
-    post_request_and_print_output(Some(system_prompts), &prompt, opts)
+    post_request_and_print_output(&prompt, Some(system_prompts), opts)
 }
 
 /// Fetches a GitHub issue and its comments, then sends them to the AI for triaging.
 fn triage_issue(repo: &String, issue_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
     let issue = get_github_issue(repo, issue_id)?;
     let comments = get_github_issue_comments(repo, issue_id)?;
-    let prompt = "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run it.".to_string();
+    let prompt = "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run
+it.".to_string();
 
     let system_prompts: Vec<String> = vec![
         serde_json::to_string(&issue)?,
         serde_json::to_string(&comments)?,
     ];
 
-    post_request_and_print_output(Some(system_prompts), &prompt, opts)
+    post_request_and_print_output(&prompt, Some(system_prompts), opts)
 }
 
 /// Fetches recent issues and pull requests from specified repositories and sends them to the AI with a given command prompt.
@@ -206,7 +343,7 @@ fn prompt_issues_and_pull_requests(
     ];
 
     let prompt = prompt.to_string();
-    post_request_and_print_output(Some(system_prompts), &prompt, opts)
+    post_request_and_print_output(&prompt, Some(system_prompts), opts)
 }
 
 /// Analyzes recent issues and pull requests for the specified repositories.
@@ -246,7 +383,7 @@ fn prompt_command(prompt: &String, files: &Vec<String>, opts: &Opts) -> Result<(
         system_prompts.push(contents);
     }
 
-    post_request_and_print_output(Some(system_prompts), prompt, opts)
+    post_request_and_print_output(prompt, Some(system_prompts), opts)
 }
 
 #[derive(Parser, Debug)]
