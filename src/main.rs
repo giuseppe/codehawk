@@ -110,7 +110,7 @@ struct ToolCall {
 }
 
 #[derive(Serialize, Debug)]
-struct OpenRouterRequest {
+struct OpenAIRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<Message>,
@@ -127,20 +127,20 @@ struct Message {
 }
 
 #[derive(Deserialize, Debug)]
-struct OpenRouterErrorMetadata {
-    raw: String,
+struct OpenAIErrorMetadata {
+    raw: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
-struct OpenRouterError {
+struct OpenAIError {
     code: Option<u64>,
     message: String,
-    metadata: Option<OpenRouterErrorMetadata>,
+    metadata: Option<OpenAIErrorMetadata>,
 }
 
 #[derive(Deserialize, Debug)]
-struct OpenRouterResponse {
-    error: Option<OpenRouterError>,
+struct OpenAIResponse {
+    error: Option<OpenAIError>,
     choices: Option<Vec<Choice>>,
 }
 
@@ -339,13 +339,13 @@ fn tool_call(req: &ToolCall) -> Result<Message, Box<dyn Error>> {
     Ok(msg)
 }
 
-/// Sends a POST request to the OpenRouter API with the given prompt and options.
-fn open_router_post_request(
+/// Sends a POST request to the OpenAI API with the given prompt and options.
+fn openai_post_request(
     prompt: &String,
     system_prompts: Option<Vec<String>>,
     other_messages: Option<Vec<Message>>,
     opts: &Opts,
-) -> Result<OpenRouterResponse, Box<dyn Error>> {
+) -> Result<OpenAIResponse, Box<dyn Error>> {
     let api_key = read_api_key()?;
 
     let bearer_auth = format!("Bearer {}", &api_key);
@@ -388,7 +388,7 @@ fn open_router_post_request(
         }
     }
 
-    let request_body = OpenRouterRequest {
+    let request_body = OpenAIRequest {
         model: model,
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
         messages: messages,
@@ -411,14 +411,15 @@ fn open_router_post_request(
         .into());
     }
 
-    let open_router_response: OpenRouterResponse = response.json()?;
+    let openai_response: OpenAIResponse = response.json()?;
 
-    if let Some(mut err) = open_router_response.error {
-        if let Some(metadata) = err.metadata {
-            let raw_response: OpenRouterResponse =
-                serde_json::from_str::<OpenRouterResponse>(&metadata.raw)?;
-            if let Some(inner_err) = raw_response.error {
-                err = inner_err;
+    if let Some(mut err) = openai_response.error {
+        if err.metadata.is_some() {
+            if let Some(raw) = err.metadata.unwrap().raw {
+                let raw_response: OpenAIResponse = serde_json::from_str::<OpenAIResponse>(&raw)?;
+                if let Some(inner_err) = raw_response.error {
+                    err = inner_err;
+                }
             }
         }
         return Err(format!(
@@ -430,7 +431,7 @@ fn open_router_post_request(
     }
 
     let mut tool_call_messages: Vec<Message> = vec![];
-    if let Some(choices) = &open_router_response.choices {
+    if let Some(choices) = &openai_response.choices {
         for choice in choices {
             if choice.finish_reason == "tool_calls" {
                 let tool_calls = choice
@@ -452,19 +453,18 @@ fn open_router_post_request(
             tool_call_messages.append(&mut other_messages);
         }
 
-        return open_router_post_request(&prompt, system_prompts, Some(tool_call_messages), &opts);
+        return openai_post_request(&prompt, system_prompts, Some(tool_call_messages), &opts);
     }
-    Ok(open_router_response)
+    Ok(openai_response)
 }
 
-/// Sends a prompt to the OpenRouter API and prints the AI's response to standard output.
+/// Sends a prompt to the OpenAI API and prints the AI's response to standard output.
 fn post_request_and_print_output(
     prompt: &String,
     system_prompts: Option<Vec<String>>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
-    let response: OpenRouterResponse =
-        open_router_post_request(&prompt, system_prompts, None, opts)?;
+    let response: OpenAIResponse = openai_post_request(&prompt, system_prompts, None, opts)?;
     let mut builder = Builder::default();
     if let Some(choices) = response.choices {
         for choice in choices {

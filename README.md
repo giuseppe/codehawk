@@ -88,7 +88,7 @@ You can customize the AI interaction using global options placed before the comm
 codehawk prompt file1 [file2 ....]
 ```
 
-It allows to pas a raw request to the AI model.
+It allows to pass a raw request to the AI model.
 
 ## License
 codehawk is licensed under the GNU General Public License v2.0 or later.
