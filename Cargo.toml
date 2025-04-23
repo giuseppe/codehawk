@@ -11,3 +11,5 @@ dirs = "5.0"
 string-builder = "0.2.0"
 clap = { version = "~4.5.34", features = ["derive", "env"] }
 chrono = "0.4.40"
+openat2 = "0.1.2"
+libc = "0.2.172"

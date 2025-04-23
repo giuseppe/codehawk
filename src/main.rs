@@ -21,9 +21,15 @@ mod github;
 mod openai;
 
 use clap::{Parser, Subcommand};
+use libc;
+use openat2;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::os::fd::FromRawFd;
+use std::path::Path;
 use std::process::Command;
 use string_builder::Builder;
 
@@ -63,6 +69,26 @@ fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     }
     let r = String::from_utf8(output.stdout)?;
     Ok(r)
+}
+
+/// entrypoint for the read_file tool
+fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        path: String,
+        content: String,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    let mut how = openat2::OpenHow::new(libc::O_TRUNC | libc::O_WRONLY | libc::O_CREAT, 0o666);
+    how.resolve |= openat2::ResolveFlags::IN_ROOT;
+
+    let raw_fd = openat2::openat2(Some(libc::AT_FDCWD), Path::new(&params.path), &how)?;
+    let mut file = unsafe { File::from_raw_fd(raw_fd) };
+
+    file.write_all(&params.content.as_bytes())?;
+    Ok("".into())
 }
 
 /// entrypoint for the list_all_files tool
@@ -128,6 +154,40 @@ fn initialize_tools() -> ToolsCollection {
                     },
                     "required": [
                         "path"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "write_file".to_string(),
+        tool_write_file,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Create or replace the content of a file stored in the repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "path of the file under the repository, e.g. src/main.rs"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "the content of the new file"
+                        }
+                    },
+                    "required": [
+                        "path",
+                        "content"
                     ],
                     "additionalProperties": false
                 }
