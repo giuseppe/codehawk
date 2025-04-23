@@ -22,7 +22,7 @@ mod github;
 use clap::{Parser, Subcommand};
 use dirs;
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -34,8 +34,8 @@ use std::time::Duration;
 use string_builder::Builder;
 
 use github::{
-    get_github_issue, get_github_issue_comments, get_github_issues, get_github_pull_request,
-    get_github_pull_request_patch, get_github_pull_requests, Issues, PullRequests,
+    Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
+    get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -127,7 +127,20 @@ struct Message {
 }
 
 #[derive(Deserialize, Debug)]
+struct OpenRouterErrorMetadata {
+    raw: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenRouterError {
+    code: Option<u64>,
+    message: String,
+    metadata: Option<OpenRouterErrorMetadata>,
+}
+
+#[derive(Deserialize, Debug)]
 struct OpenRouterResponse {
+    error: Option<OpenRouterError>,
     choices: Option<Vec<Choice>>,
 }
 
@@ -163,6 +176,52 @@ const TOOLS_DATA: &str = r#"
         {
             "type": "function",
             "function": {
+                "name": "github_issue",
+                "description": "Get the github issue description.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "issue": {
+                            "type": "number",
+                            "description": "number of the github issue"
+                        }
+                    },
+                    "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "github_issue_comments",
+                "description": "Get the comments associated with the github issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "issue": {
+                            "type": "number",
+                            "description": "number of the github issue"
+                        }
+                    },
+                    "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "list_all_files",
                 "description": "Get the list of all the files in the repository.",
                 "parameters": {
@@ -195,7 +254,7 @@ const TOOLS_DATA: &str = r#"
                 }
             }
         }
-]
+    ]
     "#;
 
 /// entrypoint for the list_all_files tool
@@ -210,6 +269,32 @@ fn tool_list_all_files() -> Result<String, Box<dyn Error>> {
     }
     let r = String::from_utf8(output.stdout)?;
     Ok(r)
+}
+
+/// entrypoint for the github_issue tool
+fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        issue: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let issue = get_github_issue(&params.repo, params.issue)?;
+    Ok(serde_json::to_string(&issue)?)
+}
+
+/// entrypoint for the github_issue tool
+fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        issue: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let comments = get_github_issue_comments(&params.repo, params.issue)?;
+    Ok(serde_json::to_string(&comments)?)
 }
 
 /// entrypoint for the read_file tool
@@ -239,6 +324,8 @@ fn tool_call(req: &ToolCall) -> Result<Message, Box<dyn Error>> {
     let content: String = match req.function.name.as_str() {
         "list_all_files" => tool_list_all_files()?,
         "read_file" => tool_read_file(&req.function.arguments)?,
+        "github_issue" => tool_github_issue(&req.function.arguments)?,
+        "github_issue_comments" => tool_github_issue_comments(&req.function.arguments)?,
         _ => return Err("invalid tool used".into()),
     };
 
@@ -325,6 +412,22 @@ fn open_router_post_request(
     }
 
     let open_router_response: OpenRouterResponse = response.json()?;
+
+    if let Some(mut err) = open_router_response.error {
+        if let Some(metadata) = err.metadata {
+            let raw_response: OpenRouterResponse =
+                serde_json::from_str::<OpenRouterResponse>(&metadata.raw)?;
+            if let Some(inner_err) = raw_response.error {
+                err = inner_err;
+            }
+        }
+        return Err(format!(
+            "got API error code: {}: {}",
+            err.code.unwrap_or_else(|| 400),
+            err.message
+        )
+        .into());
+    }
 
     let mut tool_call_messages: Vec<Message> = vec![];
     if let Some(choices) = &open_router_response.choices {
