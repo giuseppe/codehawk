@@ -21,17 +21,212 @@ mod github;
 mod openai;
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use std::error::Error;
 use std::fs;
+use std::process::Command;
 use string_builder::Builder;
 
 use github::{
     Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
     get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
-use openai::{OpenAIResponse, post_request};
+use openai::{OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, post_request};
 
 const DEFAULT_DAYS: u64 = 7;
+
+fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
+    let item = ToolItem {
+        callback: callback,
+        schema: schema,
+    };
+    tools.insert(name, item);
+}
+
+/// entrypoint for the read_file tool
+fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        path: String,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    let mut cmd = Command::new("git");
+    cmd.arg("show").arg(format!("HEAD:{}", params.path));
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8(output.stderr)?;
+        let err: Box<dyn Error> = stderr.into();
+        return Err(err);
+    }
+    let r = String::from_utf8(output.stdout)?;
+    Ok(r)
+}
+
+/// entrypoint for the list_all_files tool
+fn tool_list_all_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("ls-files");
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8(output.stderr)?;
+        let err: Box<dyn Error> = stderr.into();
+        return Err(err);
+    }
+    let r = String::from_utf8(output.stdout)?;
+    Ok(r)
+}
+
+/// entrypoint for the github_issue tool
+fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        issue: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let issue = get_github_issue(&params.repo, params.issue)?;
+    Ok(serde_json::to_string(&issue)?)
+}
+
+/// entrypoint for the github_issue tool
+fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        issue: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let comments = get_github_issue_comments(&params.repo, params.issue)?;
+    Ok(serde_json::to_string(&comments)?)
+}
+
+fn initialize_tools() -> ToolsCollection {
+    let mut tools: ToolsCollection = ToolsCollection::new();
+
+    append_tool(
+        &mut tools,
+        "read_file".to_string(),
+        tool_read_file,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Get the content of a file stored in the repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "path of the file under the repository, e.g. src/main.rs"
+                        }
+                    },
+                    "required": [
+                        "path"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "list_all_files".to_string(),
+        tool_list_all_files,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "list_all_files",
+                "description": "Get the list of all the files in the repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                    },
+                    "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "github_issue".to_string(),
+        tool_github_issue,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_issue",
+                "description": "Get the github issue description.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "issue": {
+                            "type": "number",
+                            "description": "number of the github issue"
+                        }
+                    },
+                    "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "github_issue_comments".to_string(),
+        tool_github_issue_comments,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_issue_comments",
+                "description": "Get the comments associated with the github issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "issue": {
+                            "type": "number",
+                            "description": "number of the github issue"
+                        }
+                    },
+                    "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    tools
+}
 
 /// Sends a prompt to the OpenAI API and prints the AI's response to standard output.
 fn post_request_and_print_output(
@@ -43,7 +238,9 @@ fn post_request_and_print_output(
         max_tokens: opts.max_tokens,
         model: opts.model.clone(),
     };
-    let response: OpenAIResponse = post_request(&prompt, system_prompts, None, &openai_opts)?;
+    let tools = initialize_tools();
+    let response: OpenAIResponse =
+        post_request(&prompt, system_prompts, None, &tools, &openai_opts)?;
     let mut builder = Builder::default();
     if let Some(choices) = response.choices {
         for choice in choices {

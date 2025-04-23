@@ -17,8 +17,6 @@
  *
  */
 
-use crate::github;
-
 use dirs;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -27,14 +25,18 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::process::Command;
 use std::time::Duration;
-
-use github::{get_github_issue, get_github_issue_comments};
 
 pub struct Opts {
     pub max_tokens: Option<u32>,
     pub model: Option<String>,
+}
+
+pub type ToolCallback = fn(&String) -> Result<String, Box<dyn Error>>;
+pub type ToolsCollection = HashMap<String, ToolItem>;
+pub struct ToolItem {
+    pub callback: ToolCallback,
+    pub schema: String,
 }
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -148,183 +150,15 @@ pub struct Choice {
     pub finish_reason: String,
 }
 
-/// List of supported tools, must be in sync with `tool_call`.  It must be something like:
-// {
-//     "type": "function",
-//     "function": {
-//         "name": "get_weather",
-//         "description": "Get current temperature for a given location.",
-//         "parameters": {
-//             "type": "object",
-//             "properties": {
-//                 "location": {
-//                     "type": "string",
-//                     "description": "City and country e.g. Bogotá, Colombia"
-//                 }
-//             },
-//             "required": [
-//                 "location"
-//             ],
-//             "additionalProperties": false
-//         }
-//     }
-// }
-const TOOLS_DATA: &str = r#"
-    [
-        {
-            "type": "function",
-            "function": {
-                "name": "github_issue",
-                "description": "Get the github issue description.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "github repo name, e.g. giuseppe/codehawk"
-                        },
-                        "issue": {
-                            "type": "number",
-                            "description": "number of the github issue"
-                        }
-                    },
-                    "required": [
-                    ],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "github_issue_comments",
-                "description": "Get the comments associated with the github issue.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "github repo name, e.g. giuseppe/codehawk"
-                        },
-                        "issue": {
-                            "type": "number",
-                            "description": "number of the github issue"
-                        }
-                    },
-                    "required": [
-                    ],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_all_files",
-                "description": "Get the list of all the files in the repository.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                    "required": [
-                    ],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Get the content of a file stored in the repository.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "path of the file under the repository, e.g. src/main.rs"
-                        }
-                    },
-                    "required": [
-                        "path"
-                    ],
-                    "additionalProperties": false
-                }
-            }
-        }
-    ]
-    "#;
-
-/// entrypoint for the list_all_files tool
-fn tool_list_all_files() -> Result<String, Box<dyn Error>> {
-    let mut cmd = Command::new("git");
-    cmd.arg("ls-files");
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
-        let err: Box<dyn Error> = stderr.into();
-        return Err(err);
-    }
-    let r = String::from_utf8(output.stdout)?;
-    Ok(r)
-}
-
-/// entrypoint for the github_issue tool
-fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
-    #[derive(Deserialize)]
-    struct Params {
-        repo: String,
-        issue: u64,
-    }
-
-    let params: Params = serde_json::from_str::<Params>(&params_str)?;
-    let issue = get_github_issue(&params.repo, params.issue)?;
-    Ok(serde_json::to_string(&issue)?)
-}
-
-/// entrypoint for the github_issue tool
-fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Error>> {
-    #[derive(Deserialize)]
-    struct Params {
-        repo: String,
-        issue: u64,
-    }
-
-    let params: Params = serde_json::from_str::<Params>(&params_str)?;
-    let comments = get_github_issue_comments(&params.repo, params.issue)?;
-    Ok(serde_json::to_string(&comments)?)
-}
-
-/// entrypoint for the read_file tool
-fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
-    #[derive(Deserialize)]
-    struct Params {
-        path: String,
-    }
-
-    let params: Params = serde_json::from_str::<Params>(&params_str)?;
-
-    let mut cmd = Command::new("git");
-    cmd.arg("show").arg(format!("HEAD:{}", params.path));
-
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
-        let err: Box<dyn Error> = stderr.into();
-        return Err(err);
-    }
-    let r = String::from_utf8(output.stdout)?;
-    Ok(r)
-}
-
 /// Perform a tool call and return the message to send back.
-fn tool_call(req: &ToolCall) -> Result<Message, Box<dyn Error>> {
-    let content: String = match req.function.name.as_str() {
-        "list_all_files" => tool_list_all_files()?,
-        "read_file" => tool_read_file(&req.function.arguments)?,
-        "github_issue" => tool_github_issue(&req.function.arguments)?,
-        "github_issue_comments" => tool_github_issue_comments(&req.function.arguments)?,
-        _ => return Err("invalid tool used".into()),
+fn tool_call(
+    tools_collection: &ToolsCollection,
+    req: &ToolCall,
+) -> Result<Message, Box<dyn Error>> {
+    let tool = tools_collection.get(&req.function.name);
+    let content: String = match tool {
+        None => return Err("invalid tool requested".into()),
+        Some(t) => (t.callback)(&req.function.arguments)?,
     };
 
     let msg = Message {
@@ -342,6 +176,7 @@ pub fn post_request(
     prompt: &String,
     system_prompts: Option<Vec<String>>,
     other_messages: Option<Vec<Message>>,
+    tools_collection: &ToolsCollection,
     opts: &Opts,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
     let api_key = read_api_key()?;
@@ -357,7 +192,12 @@ pub fn post_request(
         None => MODEL.to_string(),
     };
 
-    let tools: Vec<Tool> = serde_json::from_str::<Vec<Tool>>(&TOOLS_DATA)?;
+    let mut tools: Vec<Tool> = vec![];
+
+    for t in tools_collection.values() {
+        let tool_schema = serde_json::from_str::<Tool>(&t.schema)?;
+        tools.push(tool_schema);
+    }
 
     let mut messages: Vec<Message> = vec![];
 
@@ -439,7 +279,7 @@ pub fn post_request(
                     .ok_or("Invalid response")?;
                 tool_call_messages.push(choice.message.clone());
                 for tool_call_request in tool_calls {
-                    let msg = tool_call(tool_call_request)?;
+                    let msg = tool_call(&tools_collection, tool_call_request)?;
                     tool_call_messages.push(msg);
                 }
             }
@@ -451,7 +291,13 @@ pub fn post_request(
             tool_call_messages.append(&mut other_messages);
         }
 
-        return post_request(&prompt, system_prompts, Some(tool_call_messages), &opts);
+        return post_request(
+            &prompt,
+            system_prompts,
+            Some(tool_call_messages),
+            &tools_collection,
+            &opts,
+        );
     }
     Ok(openai_response)
 }
