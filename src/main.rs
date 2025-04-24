@@ -39,6 +39,8 @@ use github::{
 };
 use openai::{OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, post_request};
 
+const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL: &str = "google/gemini-2.5-pro-preview-03-25";
 const DEFAULT_DAYS: u64 = 7;
 
 fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
@@ -296,7 +298,8 @@ fn post_request_and_print_output(
 ) -> Result<(), Box<dyn Error>> {
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
-        model: opts.model.clone(),
+        model: opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string()),
+        endpoint: OPEN_ROUTER_URL.to_string(),
     };
     let tools = initialize_tools();
     let response: OpenAIResponse =

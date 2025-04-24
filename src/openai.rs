@@ -27,7 +27,8 @@ use std::time::Duration;
 
 pub struct Opts {
     pub max_tokens: Option<u32>,
-    pub model: Option<String>,
+    pub model: String,
+    pub endpoint: String,
 }
 
 pub type ToolCallback = fn(&String) -> Result<String, Box<dyn Error>>;
@@ -37,8 +38,6 @@ pub struct ToolItem {
     pub schema: String,
 }
 
-const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL: &str = "google/gemini-2.5-pro-preview-03-25";
 const MAX_TOKENS: u32 = 16384;
 
 /// Reads the OpenRouter API key from the file `~/.openrouter/key`.
@@ -181,11 +180,6 @@ pub fn post_request(
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
 
-    let model: String = match &opts.model {
-        Some(s) => s.to_string(),
-        None => MODEL.to_string(),
-    };
-
     let mut tools: Vec<Tool> = vec![];
 
     for t in tools_collection.values() {
@@ -221,14 +215,14 @@ pub fn post_request(
     }
 
     let request_body = OpenAIRequest {
-        model: model,
+        model: opts.model.clone(),
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
         messages: messages,
         tools: tools,
     };
 
     let response = Client::new()
-        .post(OPEN_ROUTER_URL)
+        .post(&opts.endpoint)
         .timeout(Duration::from_secs(1000))
         .headers(headers)
         .json(&request_body)
