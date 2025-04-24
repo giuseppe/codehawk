@@ -12,3 +12,6 @@ string-builder = "0.2.0"
 clap = { version = "~4.5.34", features = ["derive", "env"] }
 chrono = "0.4.40"
 pathrs = { git = "https://github.com/openSUSE/libpathrs.git" }
+
+[lib]
+crate-type = ["rlib"]
