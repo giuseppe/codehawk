@@ -141,7 +141,7 @@ pub struct OpenAIResponse {
 #[derive(Deserialize, Debug)]
 pub struct Choice {
     pub message: Message,
-    pub finish_reason: String,
+    pub finish_reason: Option<String>,
 }
 
 /// Perform a tool call and return the message to send back.
@@ -260,7 +260,11 @@ pub fn post_request(
     let mut tool_call_messages: Vec<Message> = vec![];
     if let Some(choices) = &openai_response.choices {
         for choice in choices {
-            if choice.finish_reason == "tool_calls" {
+            let finish_reason = choice
+                .finish_reason
+                .clone()
+                .unwrap_or_else(|| "".to_string());
+            if finish_reason == "tool_calls" {
                 let tool_calls = choice
                     .message
                     .tool_calls
