@@ -108,7 +108,7 @@ pub struct OpenAIRequest {
     pub model: String,
     pub max_tokens: u32,
     pub messages: Vec<Message>,
-    pub tools: Vec<Tool>,
+    pub tools: Option<Vec<Tool>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -183,7 +183,6 @@ pub fn post_request(
     }
 
     let mut tools: Vec<Tool> = vec![];
-
     for t in tools_collection.values() {
         let tool_schema = serde_json::from_str::<Tool>(&t.schema)?;
         tools.push(tool_schema);
@@ -220,7 +219,7 @@ pub fn post_request(
         model: opts.model.clone(),
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
         messages: messages,
-        tools: tools,
+        tools: if tools.len() > 0 { Some(tools) } else { None },
     };
 
     let response = Client::new()

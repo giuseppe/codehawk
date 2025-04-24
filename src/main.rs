@@ -399,7 +399,10 @@ fn post_request_and_print_output(
         model: opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string()),
         endpoint: OPEN_ROUTER_URL.to_string(),
     };
-    let tools = initialize_tools();
+    let tools = match opts.no_tools {
+        true => ToolsCollection::new(),
+        false => initialize_tools(),
+    };
     let response: OpenAIResponse =
         post_request(&prompt, system_prompts, None, &tools, &openai_opts)?;
     let mut builder = Builder::default();
@@ -509,9 +512,14 @@ fn prompt_command(prompt: &String, files: &Vec<String>, opts: &Opts) -> Result<(
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
     #[clap(short, long)]
+    /// Override the maximum number of tokens to generate
     max_tokens: Option<u32>,
     #[clap(long)]
+    /// Specify the AI model to use
     model: Option<String>,
+    #[clap(long)]
+    /// Inhibit usage of any tool
+    no_tools: bool,
 
     #[clap(subcommand)]
     command: CliCommand,
