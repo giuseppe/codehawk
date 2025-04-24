@@ -173,7 +173,6 @@ pub fn post_request(
     tools_collection: &ToolsCollection,
     opts: &Opts,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
-
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 

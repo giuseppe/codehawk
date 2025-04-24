@@ -137,8 +137,102 @@ fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Err
     Ok(serde_json::to_string(&comments)?)
 }
 
+/// entrypoint for the github_pull_request tool
+fn tool_github_pull_request(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        pull_request: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let pr = get_github_pull_request(&params.repo, params.pull_request)?;
+    Ok(serde_json::to_string(&pr)?)
+}
+
+/// entrypoint for the github_pull_request_patch tool
+fn tool_github_pull_request_patch(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        pull_request: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let pr = get_github_pull_request_patch(&params.repo, params.pull_request)?;
+    Ok(serde_json::to_string(&pr)?)
+}
+
 fn initialize_tools() -> ToolsCollection {
     let mut tools: ToolsCollection = ToolsCollection::new();
+
+    append_tool(
+        &mut tools,
+        "github_pull_request".to_string(),
+        tool_github_pull_request,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_pull_request",
+                "description": "Get information about a github pull request.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "pull_request": {
+                            "type": "number",
+                            "description": "number of the pull request"
+                        }
+                    },
+                    "required": [
+                        "repo",
+                        "pull_request"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "github_pull_request_patch".to_string(),
+        tool_github_pull_request_patch,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_pull_request_patch",
+                "description": "Get the raw patch for a github pull request.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "pull_request": {
+                            "type": "number",
+                            "description": "number of the pull request"
+                        }
+                    },
+                    "required": [
+                        "repo",
+                        "pull_request"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
 
     append_tool(
         &mut tools,
