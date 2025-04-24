@@ -39,6 +39,7 @@ pub struct ToolItem {
 }
 
 const MAX_TOKENS: u32 = 16384;
+const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 
 /// Reads the OpenRouter API key from the file `~/.openrouter/key`.
 fn read_api_key() -> Result<String, Box<dyn Error>> {
@@ -172,13 +173,15 @@ pub fn post_request(
     tools_collection: &ToolsCollection,
     opts: &Opts,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
-    let api_key = read_api_key()?;
-
-    let bearer_auth = format!("Bearer {}", &api_key);
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
+
+    if opts.endpoint == OPEN_ROUTER_URL {
+        let api_key = read_api_key()?;
+        let bearer_auth = format!("Bearer {}", &api_key);
+        headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
+    }
 
     let mut tools: Vec<Tool> = vec![];
 
