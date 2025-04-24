@@ -21,15 +21,13 @@ mod github;
 mod openai;
 
 use clap::{Parser, Subcommand};
-use libc;
-use openat2;
+use pathrs::{Root, flags::OpenFlags};
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
-use std::fs::File;
+use std::fs::Permissions;
 use std::io::Write;
-use std::os::fd::FromRawFd;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use string_builder::Builder;
 
@@ -83,11 +81,17 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
-    let mut how = openat2::OpenHow::new(libc::O_TRUNC | libc::O_WRONLY | libc::O_CREAT, 0o666);
-    how.resolve |= openat2::ResolveFlags::IN_ROOT;
+    let root = Root::open(".")?;
 
-    let raw_fd = openat2::openat2(Some(libc::AT_FDCWD), Path::new(&params.path), &how)?;
-    let mut file = unsafe { File::from_raw_fd(raw_fd) };
+    let mut file = root
+        .open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC)
+        .or_else(|_| {
+            root.create_file(
+                &params.path,
+                OpenFlags::O_WRONLY,
+                &Permissions::from_mode(0o600),
+            )
+        })?;
 
     file.write_all(&params.content.as_bytes())?;
     Ok("".into())
