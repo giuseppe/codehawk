@@ -17,17 +17,15 @@
  *
  */
 
+use chrono::{Days, SecondsFormat, Utc};
+use log::{debug, trace, warn};
+use reqwest::blocking::{Client, Response};
 use reqwest::header::HeaderMap;
-
 use reqwest::header::HeaderValue;
+use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
 use std::error::Error;
-
-use chrono::{Days, SecondsFormat, Utc};
-use reqwest::blocking::{Client, Response};
-use reqwest::header::USER_AGENT;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -383,22 +381,34 @@ pub type Comments = Vec<Comment>;
 fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("codehawk"));
-
     let client = Client::new();
-    let response = client
-        .get(url)
-        .headers(headers)
-        .send()?
-        .error_for_status()?;
+    debug!("Sending GET request to {}", url);
 
+    let response = client.get(url).headers(headers).send().map_err(|e| {
+        warn!("Request to {} failed: {}", url, e);
+        e
+    })?;
+
+    debug!("Received response with status: {}", response.status());
+
+    let response = response.error_for_status().map_err(|e| {
+        debug!("HTTP error status: {}", e);
+        e
+    })?;
+
+    trace!("Request to {} completed successfully", url);
     Ok(response)
 }
 
 /// Makes an HTTP GET request to a standard GitHub URL (not the API).
 fn make_github_request(path: &String) -> Result<Response, Box<dyn Error>> {
     let url = format!("https://www.github.com/{}", path);
+    debug!("Making GitHub request to: {}", url);
 
-    make_request(&url)
+    let response = make_request(&url)?;
+
+    debug!("GitHub request successful: {}", path);
+    Ok(response)
 }
 
 /// Makes an HTTP GET request to the GitHub API.
@@ -407,75 +417,209 @@ fn make_github_api_request(
     query: Option<&String>,
 ) -> Result<Response, Box<dyn Error>> {
     let url = match query {
-        Some(query) => format!("https://api.github.com/{}?{}", path, query),
-        None => format!("https://api.github.com/{}", path),
+        Some(query) => {
+            let full_url = format!("https://api.github.com/{}?{}", path, query);
+            debug!("Making GitHub API request with query: {}", full_url);
+            full_url
+        }
+        None => {
+            let full_url = format!("https://api.github.com/{}", path);
+            debug!("Making GitHub API request: {}", full_url);
+            full_url
+        }
     };
 
-    make_request(&url)
+    let response = make_request(&url)?;
+
+    debug!("GitHub API request successful: {}", path);
+    Ok(response)
 }
 
 /// Fetches issues from a GitHub repository that have been updated within the last `days`.
 pub fn get_github_issues(repo: &String, days: u64) -> Result<Issues, Box<dyn Error>> {
+    debug!(
+        "Fetching issues from repository {} updated in the last {} days",
+        repo, days
+    );
+
     let now = Utc::now();
     let since = now.checked_sub_days(Days::new(days)).unwrap();
     let query = format!("since={}", since.to_rfc3339_opts(SecondsFormat::Secs, true));
+    debug!("Using time filter: {}", query);
 
     let path = format!("repos/{}/issues", repo);
+    debug!("Requesting issues from path: {}", path);
+
     let response = make_github_api_request(&path, Some(&query))?;
+    debug!("Received response, extracting text");
+
     let text = response.text()?;
-    let issues = serde_json::from_str::<Issues>(&text)?;
+    trace!("Response body length: {} bytes", text.len());
+
+    debug!("Deserializing JSON response into Issues struct");
+    let issues = serde_json::from_str::<Issues>(&text).map_err(|e| {
+        warn!("Failed to deserialize issues: {}", e);
+        e
+    })?;
+
+    debug!("Successfully fetched {} issues from {}", issues.len(), repo);
+    trace!("Issues: {:?}", issues);
 
     Ok(issues)
 }
 
 /// Fetches pull requests from a GitHub repository that have been updated within the last `days`.
 pub fn get_github_pull_requests(repo: &String, days: u64) -> Result<PullRequests, Box<dyn Error>> {
+    debug!(
+        "Fetching pull requests from repository {} updated in the last {} days",
+        repo, days
+    );
+
     let now = Utc::now();
     let since = now.checked_sub_days(Days::new(days)).unwrap();
     let query = format!("since={}", since.to_rfc3339_opts(SecondsFormat::Secs, true));
+    debug!("Using time filter: {}", query);
 
     let path = format!("repos/{}/pulls", repo);
+    debug!("Requesting pull requests from path: {}", path);
+
     let response = make_github_api_request(&path, Some(&query))?;
+    debug!("Received response, extracting text");
+
     let text = response.text()?;
-    let pull_requests = serde_json::from_str::<PullRequests>(&text)?;
+    trace!("Response body length: {} bytes", text.len());
+
+    debug!("Deserializing JSON response into PullRequests struct");
+    let pull_requests = serde_json::from_str::<PullRequests>(&text).map_err(|e| {
+        warn!("Failed to deserialize pull requests: {}", e);
+        e
+    })?;
+
+    debug!(
+        "Successfully fetched {} pull requests from {}",
+        pull_requests.len(),
+        repo
+    );
+    trace!("Pull requests: {:?}", pull_requests);
 
     Ok(pull_requests)
 }
 
 /// Fetches detailed information for a specific pull request from a GitHub repository.
 pub fn get_github_pull_request(repo: &String, pr: u64) -> Result<PullRequest, Box<dyn Error>> {
+    debug!(
+        "Fetching details for pull request #{} from repository {}",
+        pr, repo
+    );
+
     let path = format!("repos/{}/pulls/{}", repo, pr);
+    debug!("Requesting PR from path: {}", path);
+
     let response = make_github_api_request(&path, None)?;
+    debug!("Received response, extracting text");
+
     let text = response.text()?;
-    let pull_request = serde_json::from_str::<PullRequest>(&text)?;
+    trace!("Response body length: {} bytes", text.len());
+
+    debug!("Deserializing JSON response into PullRequest struct");
+    let pull_request = serde_json::from_str::<PullRequest>(&text).map_err(|e| {
+        warn!("Failed to deserialize pull request: {}", e);
+        e
+    })?;
+
+    debug!("Successfully fetched details for PR #{}", pr);
+    trace!("Pull request details: {:?}", pull_request);
+
     Ok(pull_request)
 }
 
 /// Fetches the patch content for a specific pull request from a GitHub repository.
 pub fn get_github_pull_request_patch(repo: &String, pr: u64) -> Result<String, Box<dyn Error>> {
+    debug!(
+        "Fetching patch for pull request #{} from repository {}",
+        pr, repo
+    );
+
     let path = format!("{}/pull/{}.patch", repo, pr);
+    debug!("Requesting patch from path: {}", path);
+
     let response = make_github_request(&path)?;
+    debug!("Received response, extracting text");
+
     let text = response.text()?;
+    debug!(
+        "Successfully fetched patch for PR #{} (size: {} bytes)",
+        pr,
+        text.len()
+    );
+    trace!(
+        "First 100 chars of patch: {}",
+        if text.len() > 100 {
+            &text[..100]
+        } else {
+            &text
+        }
+    );
+
     Ok(text)
 }
 
 /// Fetches detailed information for a specific issue from a GitHub repository.
 pub fn get_github_issue(repo: &String, issue: u64) -> Result<Issue, Box<dyn Error>> {
+    debug!(
+        "Fetching details for issue #{} from repository {}",
+        issue, repo
+    );
+
     let path = format!("repos/{}/issues/{}", repo, issue);
+    debug!("Requesting issue from path: {}", path);
+
     let response = make_github_api_request(&path, None)?;
+    debug!("Received response, extracting text");
 
     let text = response.text()?;
-    let issue = serde_json::from_str::<Issue>(&text)?;
-    Ok(issue)
+    trace!("Response body length: {} bytes", text.len());
+
+    debug!("Deserializing JSON response into Issue struct");
+    let issue_data = serde_json::from_str::<Issue>(&text).map_err(|e| {
+        warn!("Failed to deserialize issue: {}", e);
+        e
+    })?;
+
+    debug!("Successfully fetched details for issue #{}", issue);
+    trace!("Issue details: {:?}", issue_data);
+
+    Ok(issue_data)
 }
 
 /// Fetches all comments for a specific issue from a GitHub repository.
 pub fn get_github_issue_comments(repo: &String, issue: u64) -> Result<Comments, Box<dyn Error>> {
+    debug!(
+        "Fetching comments for issue #{} from repository {}",
+        issue, repo
+    );
+
     let path = format!("repos/{}/issues/{}/comments", repo, issue);
+    debug!("Requesting comments from path: {}", path);
+
     let response = make_github_api_request(&path, None)?;
+    debug!("Received response, extracting text");
 
     let text = response.text()?;
-    let comments = serde_json::from_str::<Comments>(&text)?;
+    trace!("Response body length: {} bytes", text.len());
+
+    debug!("Deserializing JSON response into Comments struct");
+    let comments = serde_json::from_str::<Comments>(&text).map_err(|e| {
+        warn!("Failed to deserialize comments: {}", e);
+        e
+    })?;
+
+    debug!(
+        "Successfully fetched {} comments for issue #{}",
+        comments.len(),
+        issue
+    );
+    trace!("Comments: {:?}", comments);
 
     Ok(comments)
 }

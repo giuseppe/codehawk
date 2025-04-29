@@ -21,6 +21,8 @@ mod github;
 mod openai;
 
 use clap::{Parser, Subcommand};
+use env_logger::Env;
+use log::{debug, trace, warn};
 use pathrs::{Root, flags::OpenFlags};
 use serde::Deserialize;
 use std::error::Error;
@@ -46,6 +48,7 @@ fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback
         callback: callback,
         schema: schema,
     };
+    debug!("Adding tool: {}", name);
     tools.insert(name, item);
 }
 
@@ -55,23 +58,23 @@ fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     struct Params {
         path: String,
     }
-
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
+    debug!("Reading file: {}", params.path);
     let mut cmd = Command::new("git");
     cmd.arg("show").arg(format!("HEAD:{}", params.path));
-
     let output = cmd.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8(output.stderr)?;
         let err: Box<dyn Error> = stderr.into();
         return Err(err);
     }
+
     let r = String::from_utf8(output.stdout)?;
     Ok(r)
 }
 
-/// entrypoint for the read_file tool
+/// entrypoint for the write_file tool
 fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
@@ -81,11 +84,12 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
+    debug!("Writing to file: {}", params.path);
     let root = Root::open(".")?;
-
     let mut file = root
         .open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC)
         .or_else(|_| {
+            debug!("Creating new file: {}", params.path);
             root.create_file(
                 &params.path,
                 OpenFlags::O_WRONLY,
@@ -101,13 +105,17 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 fn tool_list_all_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
     let mut cmd = Command::new("git");
     cmd.arg("ls-files");
+
+    trace!("Executing git command: {:?}", cmd);
     let output = cmd.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8(output.stderr)?;
         let err: Box<dyn Error> = stderr.into();
         return Err(err);
     }
+
     let r = String::from_utf8(output.stdout)?;
+    debug!("Successfully listed {} files", r.lines().count());
     Ok(r)
 }
 
@@ -120,11 +128,15 @@ fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!("Fetching GitHub issue: {}/{}", params.repo, params.issue);
     let issue = get_github_issue(&params.repo, params.issue)?;
-    Ok(serde_json::to_string(&issue)?)
+
+    let s = serde_json::to_string(&issue)?;
+    Ok(s)
 }
 
-/// entrypoint for the github_issue tool
+/// entrypoint for the github_issue_comments tool
 fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
@@ -133,8 +145,14 @@ fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Err
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!(
+        "Fetching GitHub issue comments: {}/{}",
+        params.repo, params.issue
+    );
     let comments = get_github_issue_comments(&params.repo, params.issue)?;
-    Ok(serde_json::to_string(&comments)?)
+    let s = serde_json::to_string(&comments)?;
+    Ok(s)
 }
 
 /// entrypoint for the github_pull_request tool
@@ -146,8 +164,14 @@ fn tool_github_pull_request(params_str: &String) -> Result<String, Box<dyn Error
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!(
+        "Fetching GitHub PR: {}/{}",
+        params.repo, params.pull_request
+    );
     let pr = get_github_pull_request(&params.repo, params.pull_request)?;
-    Ok(serde_json::to_string(&pr)?)
+    let s = serde_json::to_string(&pr)?;
+    Ok(s)
 }
 
 /// entrypoint for the github_pull_request_patch tool
@@ -159,8 +183,13 @@ fn tool_github_pull_request_patch(params_str: &String) -> Result<String, Box<dyn
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!(
+        "Fetching GitHub PR patch: {}/{}",
+        params.repo, params.pull_request
+    );
     let pr = get_github_pull_request_patch(&params.repo, params.pull_request)?;
-    Ok(serde_json::to_string(&pr)?)
+    Ok(pr)
 }
 
 fn initialize_tools() -> ToolsCollection {
@@ -385,6 +414,7 @@ fn initialize_tools() -> ToolsCollection {
         .to_string(),
     );
 
+    debug!("Tools initialization completed with {} tools", tools.len());
     tools
 }
 
@@ -394,23 +424,45 @@ fn post_request_and_print_output(
     system_prompts: Option<Vec<String>>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
+    debug!("Prompt: {}", prompt);
+
+    let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
+    debug!("Using model: {}", model);
+
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
-        model: opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string()),
+        model: model,
         endpoint: OPEN_ROUTER_URL.to_string(),
     };
+
     let tools = match opts.no_tools {
-        true => ToolsCollection::new(),
-        false => initialize_tools(),
+        true => {
+            debug!("Tools are disabled");
+            ToolsCollection::new()
+        }
+        false => {
+            debug!("Initializing tools for AI request");
+            initialize_tools()
+        }
     };
+
+    if let Some(ref sys_prompts) = system_prompts {
+        debug!("Using {} system prompts", sys_prompts.len());
+    }
+
     let response: OpenAIResponse =
         post_request(&prompt, system_prompts, None, &tools, &openai_opts)?;
+
     let mut builder = Builder::default();
     if let Some(choices) = response.choices {
+        debug!("Received {} choices in response", choices.len());
         for choice in choices {
             builder.append(choice.message.content);
         }
+    } else {
+        warn!("No choices received in the AI response");
     }
+
     let msg = builder.string()?;
     println!("{}", &msg);
     Ok(())
@@ -418,10 +470,14 @@ fn post_request_and_print_output(
 
 /// Fetches a GitHub pull request and its patch, then sends them to the AI for review.
 fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
+    debug!("Reviewing pull request {}/{}", repo, pr_id);
+
     let pr = get_github_pull_request(repo, pr_id)?;
     let patch = get_github_pull_request_patch(repo, pr_id)?;
 
-    let system_prompts: Vec<String> = vec![patch, serde_json::to_string(&pr)?];
+    let pr_json = serde_json::to_string(&pr)?;
+
+    let system_prompts: Vec<String> = vec![patch, pr_json];
     let prompt = "Review the following pull request and report any issue with it, pay attention to the code.  Report only what is wrong, don't highlight what is done correctly.".to_string();
 
     post_request_and_print_output(&prompt, Some(system_prompts), opts)
@@ -429,15 +485,17 @@ fn review_pull_request(repo: &String, pr_id: u64, opts: &Opts) -> Result<(), Box
 
 /// Fetches a GitHub issue and its comments, then sends them to the AI for triaging.
 fn triage_issue(repo: &String, issue_id: u64, opts: &Opts) -> Result<(), Box<dyn Error>> {
+    debug!("Triaging issue {}/{}", repo, issue_id);
+
     let issue = get_github_issue(repo, issue_id)?;
     let comments = get_github_issue_comments(repo, issue_id)?;
-    let prompt = "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run
-it.".to_string();
 
-    let system_prompts: Vec<String> = vec![
-        serde_json::to_string(&issue)?,
-        serde_json::to_string(&comments)?,
-    ];
+    let prompt = "Provide a triage for the specified issue, show a minimal reproducer for the issue reducing the dependencies needed to run it.".to_string();
+
+    let issue_json = serde_json::to_string(&issue)?;
+    let comments_json = serde_json::to_string(&comments)?;
+
+    let system_prompts: Vec<String> = vec![issue_json, comments_json];
 
     post_request_and_print_output(&prompt, Some(system_prompts), opts)
 }
@@ -450,21 +508,36 @@ fn prompt_issues_and_pull_requests(
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
     let days = days.unwrap_or_else(|| DEFAULT_DAYS);
+    debug!(
+        "Fetching issues and PRs from {} repositories for the past {} days",
+        repos.len(),
+        days
+    );
+
     let mut issues: Issues = Issues::new();
     let mut pull_requests: PullRequests = PullRequests::new();
+
     for repo in repos {
+        debug!("Processing repository: {}", repo);
+
         let mut repo_issues = get_github_issues(repo, days)?;
         issues.append(&mut repo_issues);
 
         let mut repo_pull_requests = get_github_pull_requests(repo, days)?;
         pull_requests.append(&mut repo_pull_requests);
     }
-    let system_prompts: Vec<String> = vec![
-        serde_json::to_string(&issues)?,
-        serde_json::to_string(&pull_requests)?,
-    ];
 
+    debug!(
+        "Total: {} issues and {} pull requests found",
+        issues.len(),
+        pull_requests.len()
+    );
+
+    let issues_json = serde_json::to_string(&issues)?;
+    let prs_json = serde_json::to_string(&pull_requests)?;
+    let system_prompts: Vec<String> = vec![issues_json, prs_json];
     let prompt = prompt.to_string();
+
     post_request_and_print_output(&prompt, Some(system_prompts), opts)
 }
 
@@ -474,6 +547,7 @@ fn analyze_repos(
     days: Option<u64>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
+    debug!("Analyzing repos: {:?} for past {:?} days", repos, days);
     prompt_issues_and_pull_requests(
         "Provide a summary of all the issues and pull requests listed, highlighting the most important ones\n",
         repos,
@@ -488,6 +562,7 @@ fn prioritize_repos(
     days: Option<u64>,
     opts: &Opts,
 ) -> Result<(), Box<dyn Error>> {
+    debug!("Prioritizing repos: {:?} for past {:?} days", repos, days);
     prompt_issues_and_pull_requests(
         "Given the issues and pull requests listed, order them by importance and highlight the ones I must address first and why\n",
         repos,
@@ -498,13 +573,14 @@ fn prioritize_repos(
 
 /// Sends the concatenated content of specified files as a prompt to the AI.
 fn prompt_command(prompt: &String, files: &Vec<String>, opts: &Opts) -> Result<(), Box<dyn Error>> {
+    debug!("Executing prompt command with {} files", files.len());
     let mut system_prompts: Vec<String> = vec![];
 
     for file in files {
+        debug!("Reading file for prompt context: {}", file);
         let contents = fs::read_to_string(file)?;
         system_prompts.push(contents);
     }
-
     post_request_and_print_output(prompt, Some(system_prompts), opts)
 }
 
@@ -572,16 +648,25 @@ enum CliCommand {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize environment logger with custom configuration
+    let env = Env::new()
+        .filter_or("RUST_LOG", "warning")
+        .write_style_or("LOG_STYLE", "always");
+
+    env_logger::init_from_env(env);
+
+    // Parse command line arguments
     let opts = Opts::parse();
-    match opts.command {
-        CliCommand::Analyze { days, ref repo } => analyze_repos(&repo, days, &opts)?,
-        CliCommand::Prioritize { days, ref repo } => prioritize_repos(&repo, days, &opts)?,
-        CliCommand::Triage { ref repo, issue } => triage_issue(&repo, issue, &opts)?,
-        CliCommand::Review { ref repo, pr } => review_pull_request(&repo, pr, &opts)?,
-        CliCommand::Prompt {
-            ref prompt,
-            ref files,
-        } => prompt_command(&prompt, &files, &opts)?,
-    }
-    Ok(())
+    debug!("Command line options parsed");
+
+    // Execute the chosen command
+    let result = match &opts.command {
+        CliCommand::Analyze { days, repo } => analyze_repos(&repo, *days, &opts),
+        CliCommand::Prioritize { days, repo } => prioritize_repos(&repo, *days, &opts),
+        CliCommand::Triage { repo, issue } => triage_issue(&repo, *issue, &opts),
+        CliCommand::Review { repo, pr } => review_pull_request(&repo, *pr, &opts),
+        CliCommand::Prompt { prompt, files } => prompt_command(&prompt, &files, &opts),
+    };
+
+    result
 }

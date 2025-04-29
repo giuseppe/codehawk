@@ -18,6 +18,7 @@
  */
 
 use dirs;
+use log::{debug, info, trace};
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -149,17 +150,27 @@ fn tool_call(
     tools_collection: &ToolsCollection,
     req: &ToolCall,
 ) -> Result<Message, Box<dyn Error>> {
-    let tool = tools_collection.get(&req.function.name);
+    let tool_name = &req.function.name;
+    let tool = tools_collection.get(tool_name);
     let content: String = match tool {
         None => return Err("invalid tool requested".into()),
-        Some(t) => (t.callback)(&req.function.arguments)?,
+        Some(t) => {
+            info!("Executing tool {}", tool_name);
+            debug!(
+                "Passing arguments {:?} to tool {}",
+                req.function.arguments, tool_name
+            );
+            (t.callback)(&req.function.arguments)?
+        }
     };
+
+    trace!("Tool {} gave output {:?}", tool_name, content);
 
     let msg = Message {
         role: "tool".to_string(),
         content: content,
         tool_call_id: Some(req.id.clone()),
-        name: Some(req.function.name.clone()),
+        name: Some(tool_name.clone()),
         tool_calls: None,
     };
     Ok(msg)
@@ -270,9 +281,12 @@ pub fn post_request(
                     .tool_calls
                     .as_ref()
                     .ok_or("Invalid response")?;
-                tool_call_messages.push(choice.message.clone());
+                let tool_request_msg = choice.message.clone();
+                trace!("Add tool request message: {:?}", tool_request_msg);
+                tool_call_messages.push(tool_request_msg);
                 for tool_call_request in tool_calls {
                     let msg = tool_call(&tools_collection, tool_call_request)?;
+                    trace!("Add tool response message: {:?}", msg);
                     tool_call_messages.push(msg);
                 }
             }
@@ -280,7 +294,12 @@ pub fn post_request(
     }
     // If there were tool requests, repeat the request with the new results
     if tool_call_messages.len() > 0 {
+        info!(
+            "Repeat request with {} new messages from tools",
+            tool_call_messages.len()
+        );
         if let Some(mut other_messages) = other_messages {
+            info!("Append {} old messages", other_messages.len());
             tool_call_messages.append(&mut other_messages);
         }
 
