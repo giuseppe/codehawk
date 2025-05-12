@@ -53,6 +53,23 @@ fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback
     tools.insert(name, item);
 }
 
+/// entrypoint for the delete_path tool
+fn tool_delete_path(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        path: String,
+    }
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!("Remove path: {}", params.path);
+    let root = Root::open(".")?;
+
+    let path = PathBuf::from(&params.path);
+
+    root.remove_all(path)?;
+    Ok("deleted".to_owned())
+}
+
 /// entrypoint for the read_file tool
 fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
@@ -287,6 +304,35 @@ fn initialize_tools() -> ToolsCollection {
                         "path": {
                             "type": "string",
                             "description": "path of the file under the repository, e.g. src/main.rs"
+                        }
+                    },
+                    "required": [
+                        "path"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "delete_path".to_string(),
+        tool_delete_path,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_path",
+                "description": "Delete a file or a directory under the current directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "path of the file under the current directory"
                         }
                     },
                     "required": [
