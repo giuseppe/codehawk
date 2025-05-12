@@ -143,6 +143,32 @@ fn tool_list_all_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
     Ok(r)
 }
 
+/// entrypoint for the run_command tool
+fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        command: String,
+        args: Vec<String>,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    let mut cmd = Command::new(&params.command);
+    cmd.args(params.args);
+
+    trace!("Executing git command: {:?}", cmd);
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8(output.stderr)?;
+        let err: Box<dyn Error> = stderr.into();
+        return Err(err);
+    }
+
+    let r = String::from_utf8(output.stdout)?;
+    debug!("Successfully run command {}", params.command);
+    Ok(r)
+}
+
 /// entrypoint for the github_issue tool
 fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
@@ -216,7 +242,7 @@ fn tool_github_pull_request_patch(params_str: &String) -> Result<String, Box<dyn
     Ok(pr)
 }
 
-fn initialize_tools() -> ToolsCollection {
+fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
     let mut tools: ToolsCollection = ToolsCollection::new();
 
     append_tool(
@@ -467,6 +493,46 @@ fn initialize_tools() -> ToolsCollection {
         .to_string(),
     );
 
+    if !unsafe_tools {
+        return tools;
+    }
+
+    append_tool(
+        &mut tools,
+        "run_command".to_string(),
+        tool_run_command,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Run a command and gets it output.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "command to execute, e.g. /usr/bin/ls"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Arguments to pass to the command, e.g. [\"-l\", \"-a\"]"
+                        }
+                    },
+                    "required": [
+                        "command"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
     debug!("Tools initialization completed with {} tools", tools.len());
     tools
 }
@@ -495,7 +561,7 @@ fn post_request_and_print_output(
         }
         false => {
             debug!("Initializing tools for AI request");
-            initialize_tools()
+            initialize_tools(opts.unsafe_tools)
         }
     };
 
@@ -649,6 +715,9 @@ struct Opts {
     #[clap(long)]
     /// Inhibit usage of any tool
     no_tools: bool,
+    /// Enable unsafe tools
+    #[clap(long)]
+    unsafe_tools: bool,
 
     #[clap(subcommand)]
     command: CliCommand,
