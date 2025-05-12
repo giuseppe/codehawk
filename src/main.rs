@@ -28,6 +28,7 @@ use serde::Deserialize;
 use std::error::Error;
 use std::fs;
 use std::fs::Permissions;
+use std::io::Read;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -79,17 +80,15 @@ fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
     debug!("Reading file: {}", params.path);
-    let mut cmd = Command::new("git");
-    cmd.arg("show").arg(format!("HEAD:{}", params.path));
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
-        let err: Box<dyn Error> = stderr.into();
-        return Err(err);
-    }
 
-    let r = String::from_utf8(output.stdout)?;
-    Ok(r)
+    let root = Root::open(".")?;
+    let path = PathBuf::from(&params.path);
+    let mut file = root.open_subpath(path, OpenFlags::O_RDONLY)?;
+
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+
+    Ok(contents)
 }
 
 /// entrypoint for the write_file tool
