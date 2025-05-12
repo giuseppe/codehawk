@@ -30,6 +30,7 @@ use std::fs;
 use std::fs::Permissions;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
 use string_builder::Builder;
 
@@ -86,6 +87,13 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 
     debug!("Writing to file: {}", params.path);
     let root = Root::open(".")?;
+
+    if let Some(parent) = PathBuf::from(&params.path).parent() {
+        if !parent.as_os_str().is_empty() {
+            root.mkdir_all(parent, &Permissions::from_mode(0o755))?;
+        }
+    }
+
     let mut file = root
         .open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC)
         .or_else(|_| {
