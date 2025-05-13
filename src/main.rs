@@ -125,8 +125,8 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
     Ok("".into())
 }
 
-/// entrypoint for the list_all_files tool
-fn tool_list_all_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
+/// entrypoint for the list_git_files tool
+fn tool_list_git_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
     let mut cmd = Command::new("git");
     cmd.arg("ls-files");
 
@@ -407,13 +407,13 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
 
     append_tool(
         &mut tools,
-        "list_all_files".to_string(),
-        tool_list_all_files,
+        "list_git_files".to_string(),
+        tool_list_git_files,
         r#"
         {
             "type": "function",
             "function": {
-                "name": "list_all_files",
+                "name": "list_git_files",
                 "description": "Get the list of all the files in the repository.",
                 "parameters": {
                     "type": "object",
