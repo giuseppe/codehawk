@@ -42,7 +42,7 @@ use github::{
 use openai::{OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, post_request};
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL: &str = "google/gemini-2.5-pro-preview-03-25";
+const DEFAULT_MODEL: &str = "google/gemini-2.5-pro-preview";
 const DEFAULT_DAYS: u64 = 7;
 
 fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
