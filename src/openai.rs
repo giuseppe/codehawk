@@ -143,6 +143,7 @@ pub struct OpenAIResponse {
 pub struct Choice {
     pub message: Message,
     pub finish_reason: Option<String>,
+    pub native_finish_reason: Option<String>,
 }
 
 /// Perform a tool call and return the message to send back.
@@ -151,6 +152,7 @@ fn tool_call(
     req: &ToolCall,
 ) -> Result<Message, Box<dyn Error>> {
     let tool_name = &req.function.name;
+    info!("Requesting tool {}", tool_name);
     let tool = tools_collection.get(tool_name);
     let content: String = match tool {
         None => return Err("invalid tool requested".into()),
@@ -249,7 +251,11 @@ pub fn post_request(
         .into());
     }
 
-    let openai_response: OpenAIResponse = response.json()?;
+    let response_text = response.text()?;
+
+    trace!("Got response {:?}", response_text);
+
+    let openai_response: OpenAIResponse = serde_json::from_str(&response_text)?;
 
     if let Some(mut err) = openai_response.error {
         if err.metadata.is_some() {
@@ -270,13 +276,20 @@ pub fn post_request(
 
     let mut tool_call_messages: Vec<Message> = vec![];
     if let Some(choices) = &openai_response.choices {
+        trace!("Got {} choices", choices.len());
         for choice in choices {
             trace!("Got choice {:?}", choice);
             let finish_reason = choice
                 .finish_reason
                 .clone()
                 .unwrap_or_else(|| "".to_string());
-            if finish_reason == "tool_calls" {
+            if finish_reason == "error" {
+                let native_finish_reason = choice
+                    .native_finish_reason
+                    .clone()
+                    .unwrap_or_else(|| finish_reason);
+                return Err(format!("got API error: {}", native_finish_reason).into());
+            } else if finish_reason == "tool_calls" {
                 let tool_calls = choice
                     .message
                     .tool_calls

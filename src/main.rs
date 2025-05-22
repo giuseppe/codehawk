@@ -158,7 +158,7 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
         cmd.args(args);
     }
 
-    trace!("Executing git command: {:?}", cmd);
+    trace!("Executing command: {:?}", cmd);
     let output = cmd.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8(output.stderr)?;
