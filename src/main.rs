@@ -454,6 +454,8 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                         }
                     },
                     "required": [
+                        "repo",
+                        "issue"
                     ],
                     "additionalProperties": false
                 }
@@ -486,6 +488,8 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                         }
                     },
                     "required": [
+                        "repo",
+                        "issue"
                     ],
                     "additionalProperties": false
                 }
