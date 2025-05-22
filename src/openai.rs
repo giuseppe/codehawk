@@ -186,6 +186,43 @@ pub fn post_request(
     tools_collection: &ToolsCollection,
     opts: &Opts,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
+    let mut messages: Vec<Message> = vec![];
+
+    if let Some(system_prompts) = &system_prompts {
+        for system_prompt in system_prompts {
+            messages.push(Message {
+                role: "system".to_string(),
+                content: system_prompt.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+        }
+    }
+
+    if let Some(other_messages) = &other_messages {
+        for msg in other_messages {
+            messages.push(msg.clone());
+        }
+    }
+
+    messages.push(Message {
+        role: "user".to_string(),
+        content: prompt.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    });
+
+    post_request_internal(messages, tools_collection, opts)
+}
+
+/// Sends a POST request to the OpenAI API with the given prompt and options.
+fn post_request_internal(
+    mut messages: Vec<Message>,
+    tools_collection: &ToolsCollection,
+    opts: &Opts,
+) -> Result<OpenAIResponse, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
@@ -201,33 +238,6 @@ pub fn post_request(
         tools.push(tool_schema);
     }
 
-    let mut messages: Vec<Message> = vec![];
-
-    if let Some(system_prompts) = &system_prompts {
-        for system_prompt in system_prompts {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: system_prompt.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            });
-        }
-    }
-    messages.push(Message {
-        role: "user".to_string(),
-        content: prompt.to_string(),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    });
-
-    if let Some(other_messages) = &other_messages {
-        for msg in other_messages {
-            messages.push(msg.clone());
-        }
-    }
-
     let request_body = OpenAIRequest {
         model: opts.model.clone(),
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
@@ -241,6 +251,8 @@ pub fn post_request(
         .headers(headers)
         .json(&request_body)
         .send()?;
+
+    messages = request_body.messages;
 
     if !response.status().is_success() {
         return Err(format!(
@@ -312,18 +324,9 @@ pub fn post_request(
             "Repeat request with {} new messages from tools",
             tool_call_messages.len()
         );
-        if let Some(mut other_messages) = other_messages {
-            info!("Append {} old messages", other_messages.len());
-            tool_call_messages.append(&mut other_messages);
-        }
+        messages.extend(tool_call_messages);
 
-        return post_request(
-            &prompt,
-            system_prompts,
-            Some(tool_call_messages),
-            &tools_collection,
-            &opts,
-        );
+        return post_request_internal(messages, &tools_collection, &opts);
     }
     Ok(openai_response)
 }
