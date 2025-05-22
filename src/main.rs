@@ -148,13 +148,15 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         command: String,
-        args: Vec<String>,
+        args: Option<Vec<String>>,
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
     let mut cmd = Command::new(&params.command);
-    cmd.args(params.args);
+    if let Some(args) = params.args {
+        cmd.args(args);
+    }
 
     trace!("Executing git command: {:?}", cmd);
     let output = cmd.output()?;
