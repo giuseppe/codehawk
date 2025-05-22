@@ -575,8 +575,8 @@ fn post_request_and_print_output(
     let mut builder = Builder::default();
     if let Some(choices) = response.choices {
         debug!("Received {} choices in response", choices.len());
-        for choice in choices {
-            builder.append(choice.message.content);
+        if let Some(choice) = choices.first() {
+            builder.append(choice.message.content.clone());
         }
     } else {
         warn!("No choices received in the AI response");
