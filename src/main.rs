@@ -24,6 +24,7 @@ use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::{debug, trace, warn};
 use pathrs::{Root, flags::OpenFlags};
+use rustyline::DefaultEditor;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
@@ -39,7 +40,10 @@ use github::{
     Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
     get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
-use openai::{OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, post_request};
+use openai::{
+    Message, OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, make_message, post_request,
+    post_request_messages,
+};
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-pro-preview";
@@ -709,6 +713,58 @@ fn prompt_command(prompt: &String, files: &Vec<String>, opts: &Opts) -> Result<(
     post_request_and_print_output(prompt, Some(system_prompts), opts)
 }
 
+/// Interactive session
+fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
+    debug!("Executing chat command");
+
+    let mut rl = DefaultEditor::new()?;
+    let mut messages: Vec<Message> = vec![];
+    let tools = match opts.no_tools {
+        true => {
+            debug!("Tools are disabled");
+            ToolsCollection::new()
+        }
+        false => {
+            debug!("Initializing tools for AI request");
+            initialize_tools(opts.unsafe_tools)
+        }
+    };
+
+    let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
+    debug!("Using model: {}", model);
+
+    let openai_opts = openai::Opts {
+        max_tokens: opts.max_tokens,
+        model: model,
+        endpoint: OPEN_ROUTER_URL.to_string(),
+    };
+
+    loop {
+        let line = rl.readline("> ")?;
+        if line == "" {
+            continue;
+        }
+        rl.add_history_entry(line.as_str())?;
+        if line == "\\quit" {
+            return Ok(());
+        }
+        if line == "\\clear" {
+            messages = vec![];
+            continue;
+        }
+        messages.push(make_message("user", line));
+
+        let response = post_request_messages(messages, &tools, &openai_opts)?;
+        if let Some(choices) = response.choices {
+            debug!("Received {} choices in response", choices.len());
+            if let Some(choice) = choices.first() {
+                println!("{}", choice.message.content);
+            }
+        }
+        messages = response.history;
+    }
+}
+
 #[derive(Parser, Debug)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
@@ -773,6 +829,9 @@ enum CliCommand {
         /// List of files that are loaded and used as system context
         files: Vec<String>,
     },
+
+    /// Interactive session
+    Chat {},
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -794,6 +853,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         CliCommand::Triage { repo, issue } => triage_issue(&repo, *issue, &opts),
         CliCommand::Review { repo, pr } => review_pull_request(&repo, *pr, &opts),
         CliCommand::Prompt { prompt, files } => prompt_command(&prompt, &files, &opts),
+        CliCommand::Chat {} => chat_command(&opts),
     };
 
     result

@@ -73,6 +73,18 @@ To get a review for a pull request
 codehawk review <owner/repo> <pull_request_number>
 ```
 
+### Chat
+
+To start an interactive chat session with the AI:
+
+```
+codehawk chat
+```
+
+Within the chat session, you can use the following commands:
+*   `\quit`: Exit the chat session.
+*   `\clear`: Clear the chat history.
+
 ## Options
 You can customize the AI interaction using global options placed before the command (analyze or triage):
 
