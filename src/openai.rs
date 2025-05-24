@@ -137,6 +137,9 @@ pub struct OpenAIError {
 pub struct OpenAIResponse {
     pub error: Option<OpenAIError>,
     pub choices: Option<Vec<Choice>>,
+
+    #[serde(skip_deserializing)]
+    pub history: Vec<Message>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -178,6 +181,17 @@ fn tool_call(
     Ok(msg)
 }
 
+/// Create a Message from the specified role and content.
+pub fn make_message(role: &str, content: String) -> Message {
+    Message {
+        role: role.to_string(),
+        content: content,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
+}
+
 /// Sends a POST request to the OpenAI API with the given prompt and options.
 pub fn post_request(
     prompt: &String,
@@ -214,11 +228,11 @@ pub fn post_request(
         name: None,
     });
 
-    post_request_internal(messages, tools_collection, opts)
+    post_request_messages(messages, tools_collection, opts)
 }
 
-/// Sends a POST request to the OpenAI API with the given prompt and options.
-fn post_request_internal(
+/// Sends a POST request to the OpenAI API with the given messages and options.
+pub fn post_request_messages(
     mut messages: Vec<Message>,
     tools_collection: &ToolsCollection,
     opts: &Opts,
@@ -326,7 +340,7 @@ fn post_request_internal(
         );
         messages.extend(tool_call_messages);
 
-        return post_request_internal(messages, &tools_collection, &opts);
+        return post_request_messages(messages, &tools_collection, &opts);
     }
     Ok(openai_response)
 }
