@@ -34,7 +34,6 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
-use string_builder::Builder;
 
 use github::{
     Issues, PullRequests, get_github_issue, get_github_issue_comments, get_github_issues,
@@ -582,18 +581,14 @@ fn post_request_and_print_output(
     let response: OpenAIResponse =
         post_request(&prompt, system_prompts, None, &tools, &openai_opts)?;
 
-    let mut builder = Builder::default();
     if let Some(choices) = response.choices {
         debug!("Received {} choices in response", choices.len());
         if let Some(choice) = choices.first() {
-            builder.append(choice.message.content.clone());
+            println!("{}", choice.message.content);
         }
     } else {
         warn!("No choices received in the AI response");
     }
-
-    let msg = builder.string()?;
-    println!("{}", &msg);
     Ok(())
 }
 
