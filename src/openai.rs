@@ -303,7 +303,7 @@ pub fn post_request_messages(
     let mut tool_call_messages: Vec<Message> = vec![];
     if let Some(choices) = &openai_response.choices {
         trace!("Got {} choices", choices.len());
-        for choice in choices {
+        if let Some(choice) = choices.first() {
             trace!("Got choice {:?}", choice);
             let finish_reason = choice
                 .finish_reason
