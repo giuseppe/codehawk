@@ -84,6 +84,9 @@ codehawk chat
 Within the chat session, you can use the following commands:
 *   `\quit`: Exit the chat session.
 *   `\clear`: Clear the chat history.
+*   `\limit N`: Reduces the history of messages to the N most recent messages. For example, `\limit 10` keeps only the last 10 messages.
+*   `\backtrace N`: Removes the last N messages from the history. For example, `\backtrace 5` removes the last 5 messages, effectively going back 5 steps.
+*   `\show`: Displays the current chat history, with messages numbered and showing the role (user/assistant) and content.
 
 ## Options
 You can customize the AI interaction using global options placed before the command (analyze or triage):

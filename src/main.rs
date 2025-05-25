@@ -740,18 +740,95 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
     };
 
     loop {
-        let line = rl.readline("> ")?;
-        if line == "" {
+        let line = rl.readline("> ")?.trim().to_string();
+        if line.is_empty() {
             continue;
         }
         rl.add_history_entry(line.as_str())?;
+
         if line == "\\quit" {
             return Ok(());
         }
         if line == "\\clear" {
             messages = vec![];
+            println!("Chat history cleared.");
             continue;
         }
+        if line == "\\show" {
+            if messages.is_empty() {
+                println!("Chat history is empty.");
+            } else {
+                println!("Current chat history:");
+                for (i, msg) in messages.iter().enumerate() {
+                    println!("{}: [{}] {}", i + 1, msg.role, msg.content);
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        if !tool_calls.is_empty() {
+                            println!("  Tool Calls:");
+                            for (j, tool_call) in tool_calls.iter().enumerate() {
+                                println!(
+                                    "    {}.{}: {} ({})",
+                                    i + 1,
+                                    j + 1,
+                                    tool_call.function.name,
+                                    tool_call.id
+                                );
+                                println!("      Args: {}", tool_call.function.arguments);
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        if line.starts_with("\\limit ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n == 0 {
+                        println!("Limit cannot be zero. Clearing history instead.");
+                        messages = vec![];
+                    } else if messages.len() > n {
+                        // Keep the last n messages. System messages might be lost if not handled.
+                        // Assuming simple user/assistant history for now.
+                        messages = messages.split_off(messages.len() - n);
+                        println!("Chat history limited to the last {} messages.", n);
+                    } else {
+                        println!("Chat history is already within the limit of {}.", n);
+                    }
+                } else {
+                    println!("Invalid number for limit: {}", parts[1]);
+                }
+            } else {
+                println!("Usage: \\limit <number_of_messages>");
+            }
+            continue;
+        }
+        if line.starts_with("\\backtrace ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n == 0 {
+                        println!("Backtrace steps must be a positive number.");
+                    } else if n > messages.len() {
+                        println!(
+                            "Cannot go back {} steps, history has only {} messages. Clearing history.",
+                            n,
+                            messages.len()
+                        );
+                        messages = vec![];
+                    } else {
+                        messages.truncate(messages.len() - n);
+                        println!("Went back {} steps in chat history.", n);
+                    }
+                } else {
+                    println!("Invalid number for backtrace: {}", parts[1]);
+                }
+            } else {
+                println!("Usage: \\backtrace <number_of_messages>");
+            }
+            continue;
+        }
+
         messages.push(make_message("user", line));
 
         let response = post_request_messages(messages, &tools, &openai_opts)?;
