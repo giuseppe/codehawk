@@ -281,7 +281,7 @@ pub fn post_request_messages(
 
     trace!("Got response {:?}", response_text);
 
-    let openai_response: OpenAIResponse = serde_json::from_str(&response_text)?;
+    let mut openai_response: OpenAIResponse = serde_json::from_str(&response_text)?;
 
     if let Some(mut err) = openai_response.error {
         if err.metadata.is_some() {
@@ -342,5 +342,6 @@ pub fn post_request_messages(
 
         return post_request_messages(messages, &tools_collection, &opts);
     }
+    openai_response.history = messages;
     Ok(openai_response)
 }
