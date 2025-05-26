@@ -18,8 +18,8 @@
  */
 
 use dirs;
-use log::{debug, info, trace};
-use reqwest::blocking::Client;
+use log::{debug, info, trace, warn};
+use reqwest::blocking::Client as ReqwestClient;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -41,6 +41,7 @@ pub struct ToolItem {
 
 const MAX_TOKENS: u32 = 16384;
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const OPEN_ROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
 /// Reads the OpenRouter API key from the file `~/.openrouter/key`.
 fn read_api_key() -> Result<String, Box<dyn Error>> {
@@ -149,6 +150,47 @@ pub struct Choice {
     pub native_finish_reason: Option<String>,
 }
 
+// Structs for deserializing the /models endpoint response
+#[derive(Deserialize, Debug)]
+struct ModelInfo {
+    id: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ModelsApiResponse {
+    data: Vec<ModelInfo>,
+}
+
+/// Fetches the list of available models from OpenRouter.
+pub fn list_models() -> Result<Vec<String>, Box<dyn Error>> {
+    debug!("Fetching list of models from {}", OPEN_ROUTER_MODELS_URL);
+
+    let client = ReqwestClient::builder().build()?;
+
+    let response = client.get(OPEN_ROUTER_MODELS_URL).send()?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .unwrap_or_else(|e| format!("Failed to read error body: {}", e));
+        warn!(
+            "Failed to fetch models. Status: {}. Body: {}",
+            status, error_text
+        );
+        return Err(format!("Failed to fetch models: {} - {}", status, error_text).into());
+    }
+
+    let models_api_response: ModelsApiResponse = response.json()?;
+
+    if models_api_response.data.is_empty() {
+        Ok(Vec::new()) // Return empty vector if no models found
+    } else {
+        let model_ids = models_api_response.data.into_iter().map(|m| m.id).collect();
+        Ok(model_ids)
+    }
+}
+
 /// Perform a tool call and return the message to send back.
 fn tool_call(
     tools_collection: &ToolsCollection,
@@ -240,7 +282,7 @@ pub fn post_request_messages(
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    if opts.endpoint == OPEN_ROUTER_URL {
+    if opts.endpoint == OPEN_ROUTER_URL || opts.endpoint == OPEN_ROUTER_MODELS_URL {
         let api_key = read_api_key()?;
         let bearer_auth = format!("Bearer {}", &api_key);
         headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
@@ -259,9 +301,12 @@ pub fn post_request_messages(
         tools: if tools.len() > 0 { Some(tools) } else { None },
     };
 
-    let response = Client::new()
-        .post(&opts.endpoint)
+    let client = ReqwestClient::builder()
         .timeout(Duration::from_secs(1000))
+        .build()?;
+
+    let response = client
+        .post(&opts.endpoint)
         .headers(headers)
         .json(&request_body)
         .send()?;

@@ -88,6 +88,16 @@ Within the chat session, you can use the following commands:
 *   `\backtrace N`: Removes the last N messages from the history. For example, `\backtrace 5` removes the last 5 messages, effectively going back 5 steps.
 *   `\show`: Displays the current chat history, with messages numbered and showing the role (user/assistant) and content.
 
+### List available models
+
+To list the AI models available through OpenRouter:
+
+```bash
+codehawk models
+```
+
+This command fetches the list of models from `https://openrouter.ai/api/v1/models` and displays their IDs.
+
 ## Options
 You can customize the AI interaction using global options placed before the command (analyze or triage):
 

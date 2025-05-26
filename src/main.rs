@@ -40,8 +40,8 @@ use github::{
     get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
 use openai::{
-    Message, OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, make_message, post_request,
-    post_request_messages,
+    Message, OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, list_models, make_message,
+    post_request, post_request_messages,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -837,6 +837,26 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
     }
 }
 
+// ModelInfo and ModelsApiResponse structs are removed from here.
+
+/// Handles the listing of models by calling the openai module.
+fn list_models_command(_opts: &Opts) -> Result<(), Box<dyn Error>> {
+    match list_models() {
+        Ok(model_ids) => {
+            if model_ids.is_empty() {
+                println!("No models found.");
+            } else {
+                println!("Available models from OpenRouter:");
+                for model_id in model_ids {
+                    println!("- {}", model_id);
+                }
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Parser, Debug)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
@@ -904,6 +924,9 @@ enum CliCommand {
 
     /// Interactive session
     Chat {},
+
+    /// List available models from OpenRouter
+    Models {},
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -926,6 +949,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         CliCommand::Review { repo, pr } => review_pull_request(&repo, *pr, &opts),
         CliCommand::Prompt { prompt, files } => prompt_command(&prompt, &files, &opts),
         CliCommand::Chat {} => chat_command(&opts),
+        CliCommand::Models {} => list_models_command(&opts),
     };
 
     result
