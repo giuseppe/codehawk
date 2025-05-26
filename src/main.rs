@@ -24,6 +24,7 @@ use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::{debug, trace, warn};
 use pathrs::{Root, flags::OpenFlags};
+use prettytable::{Cell, Row, Table, format};
 use rustyline::DefaultEditor;
 use serde::Deserialize;
 use std::error::Error;
@@ -528,7 +529,7 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Arguments to pass to the command, e.g. [\"-l\", \"-a\"]"
+                            "description": "Arguments to pass to the command, e.g. ["-l", "-a"]"
                         }
                     },
                     "required": [
@@ -846,14 +847,46 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
 /// Handles the listing of models by calling the openai module.
 fn list_models_command(_opts: &Opts) -> Result<(), Box<dyn Error>> {
     match list_models() {
-        Ok(model_ids) => {
-            if model_ids.is_empty() {
+        Ok(models) => {
+            if models.is_empty() {
                 println!("No models found.");
             } else {
                 println!("Available models from OpenRouter:");
-                for model_id in model_ids {
-                    println!("- {}", model_id);
+                let mut table = Table::new();
+                table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+                table.set_titles(Row::new(vec![
+                    Cell::new("ID"),
+                    Cell::new("Name"),
+                    Cell::new("Context Length"),
+                    Cell::new("Prompt_USD/1M"),
+                    Cell::new("Compl_USD/1M"),
+                    Cell::new("Supported Parameters"),
+                ]));
+
+                for model in models {
+                    let prompt_price_str = model.pricing.prompt;
+                    let completion_price_str = model.pricing.completion;
+
+                    let prompt_price = match prompt_price_str.parse::<f64>() {
+                        Ok(p) => format!("{:.6}", p),
+                        Err(_) => prompt_price_str,
+                    };
+                    let completion_price = match completion_price_str.parse::<f64>() {
+                        Ok(c) => format!("{:.6}", c),
+                        Err(_) => completion_price_str,
+                    };
+                    let supported_parameters = model.supported_parameters.join(",");
+
+                    table.add_row(Row::new(vec![
+                        Cell::new(&model.id),
+                        Cell::new(&model.name),
+                        Cell::new(&model.context_length.to_string()),
+                        Cell::new(&prompt_price),
+                        Cell::new(&completion_price),
+                        Cell::new(&supported_parameters),
+                    ]));
                 }
+                table.printstd();
             }
             Ok(())
         }

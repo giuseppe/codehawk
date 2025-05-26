@@ -15,6 +15,7 @@ pathrs = { git = "https://github.com/openSUSE/libpathrs.git" }
 log = "0.4"
 env_logger = "0.11.8"
 rustyline = "15.0.0"
+prettytable = "0.10.0"
 
 [lib]
 crate-type = ["rlib"]

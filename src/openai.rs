@@ -150,10 +150,58 @@ pub struct Choice {
     pub native_finish_reason: Option<String>,
 }
 
-// Structs for deserializing the /models endpoint response
-#[derive(Deserialize, Debug)]
-struct ModelInfo {
-    id: String,
+/// Represents a single model entry.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModelInfo {
+    pub id: String,
+    pub hugging_face_id: Option<String>,
+    pub name: String,
+    pub created: u64,
+    pub description: String,
+    pub context_length: u32,
+    pub architecture: Architecture,
+    pub pricing: Pricing,
+    pub top_provider: TopProvider,
+    pub supported_parameters: Vec<String>,
+}
+
+/// Represents the architecture details of a model.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Architecture {
+    pub modality: String,
+    pub input_modalities: Vec<String>,
+    pub output_modalities: Vec<String>,
+    pub tokenizer: String,
+    pub instruct_type: Option<String>,
+}
+
+/// Represents the pricing details for a model.
+/// All monetary values are stored as strings as they appear in the JSON.
+/// These could be parsed into a decimal type if needed.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Pricing {
+    pub prompt: String,
+    pub completion: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internal_reasoning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_cache_read: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_cache_write: Option<String>,
+}
+
+/// Represents the top provider details for a model.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TopProvider {
+    pub context_length: Option<u32>,
+    pub max_completion_tokens: Option<u32>,
+    pub is_moderated: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -162,7 +210,7 @@ struct ModelsApiResponse {
 }
 
 /// Fetches the list of available models from OpenRouter.
-pub fn list_models() -> Result<Vec<String>, Box<dyn Error>> {
+pub fn list_models() -> Result<Vec<ModelInfo>, Box<dyn Error>> {
     debug!("Fetching list of models from {}", OPEN_ROUTER_MODELS_URL);
 
     let client = ReqwestClient::builder().build()?;
@@ -183,12 +231,7 @@ pub fn list_models() -> Result<Vec<String>, Box<dyn Error>> {
 
     let models_api_response: ModelsApiResponse = response.json()?;
 
-    if models_api_response.data.is_empty() {
-        Ok(Vec::new()) // Return empty vector if no models found
-    } else {
-        let model_ids = models_api_response.data.into_iter().map(|m| m.id).collect();
-        Ok(model_ids)
-    }
+    Ok(models_api_response.data)
 }
 
 /// Perform a tool call and return the message to send back.
