@@ -234,47 +234,8 @@ pub fn make_message(role: &str, content: String) -> Message {
     }
 }
 
-/// Sends a POST request to the OpenAI API with the given prompt and options.
-pub fn post_request(
-    prompt: &String,
-    system_prompts: Option<Vec<String>>,
-    other_messages: Option<Vec<Message>>,
-    tools_collection: &ToolsCollection,
-    opts: &Opts,
-) -> Result<OpenAIResponse, Box<dyn Error>> {
-    let mut messages: Vec<Message> = vec![];
-
-    if let Some(system_prompts) = &system_prompts {
-        for system_prompt in system_prompts {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: system_prompt.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            });
-        }
-    }
-
-    if let Some(other_messages) = &other_messages {
-        for msg in other_messages {
-            messages.push(msg.clone());
-        }
-    }
-
-    messages.push(Message {
-        role: "user".to_string(),
-        content: prompt.to_string(),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    });
-
-    post_request_messages(messages, tools_collection, opts)
-}
-
 /// Sends a POST request to the OpenAI API with the given messages and options.
-pub fn post_request_messages(
+pub fn post_request(
     mut messages: Vec<Message>,
     tools_collection: &ToolsCollection,
     opts: &Opts,
@@ -385,7 +346,7 @@ pub fn post_request_messages(
         );
         messages.extend(tool_call_messages);
 
-        return post_request_messages(messages, &tools_collection, &opts);
+        return post_request(messages, &tools_collection, &opts);
     }
     openai_response.history = messages;
     Ok(openai_response)

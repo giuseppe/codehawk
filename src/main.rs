@@ -41,7 +41,7 @@ use github::{
 };
 use openai::{
     Message, OpenAIResponse, ToolCallback, ToolItem, ToolsCollection, list_models, make_message,
-    post_request, post_request_messages,
+    post_request,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -574,12 +574,16 @@ fn post_request_and_print_output(
         }
     };
 
+    let mut messages: Vec<Message> = vec![];
     if let Some(ref sys_prompts) = system_prompts {
         debug!("Using {} system prompts", sys_prompts.len());
+        for sp in sys_prompts {
+            messages.push(make_message("system", sp.clone()));
+        }
     }
+    messages.push(make_message("user", prompt.clone()));
 
-    let response: OpenAIResponse =
-        post_request(&prompt, system_prompts, None, &tools, &openai_opts)?;
+    let response: OpenAIResponse = post_request(messages, &tools, &openai_opts)?;
 
     if let Some(choices) = response.choices {
         debug!("Received {} choices in response", choices.len());
@@ -660,9 +664,9 @@ fn prompt_issues_and_pull_requests(
     let issues_json = serde_json::to_string(&issues)?;
     let prs_json = serde_json::to_string(&pull_requests)?;
     let system_prompts: Vec<String> = vec![issues_json, prs_json];
-    let prompt = prompt.to_string();
+    let prompt_string = prompt.to_string();
 
-    post_request_and_print_output(&prompt, Some(system_prompts), opts)
+    post_request_and_print_output(&prompt_string, Some(system_prompts), opts)
 }
 
 /// Analyzes recent issues and pull requests for the specified repositories.
@@ -826,7 +830,7 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
 
         messages.push(make_message("user", line));
 
-        let response = post_request_messages(messages, &tools, &openai_opts)?;
+        let response = post_request(messages, &tools, &openai_opts)?;
         if let Some(choices) = response.choices {
             debug!("Received {} choices in response", choices.len());
             if let Some(choice) = choices.first() {
