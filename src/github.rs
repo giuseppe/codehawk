@@ -56,7 +56,7 @@ pub struct Issue {
     // Renamed because 'type' is a Rust keyword
     #[serde(rename = "type")]
     pub issue_type: Option<Type>,
-    pub sub_issues_summary: SubIssuesSummary,
+    pub sub_issues_summary: Option<SubIssuesSummary>,
     pub active_lock_reason: Option<String>,
     pub body: Option<String>,
     pub closed_by: Option<Value>,
