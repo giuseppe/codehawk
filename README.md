@@ -12,6 +12,16 @@ mkdir -p ~/.openrouter
 echo "your-openrouter-api-key" > ~/.openrouter/key
 ```
 
+A GitHub token can be used for authenticated requests to the GitHub API,
+which can help avoid rate limiting. If you have a personal access token,
+store it in `~/.github/token`:
+
+```bash
+mkdir -p ~/.github
+echo "your-github-token" > ~/.github/token
+```
+
+
 ## Usage
 
 ### Analyze recent issues and pull requests

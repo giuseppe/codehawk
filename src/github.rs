@@ -18,11 +18,10 @@
  */
 
 use chrono::{Days, SecondsFormat, Utc};
+use dirs;
 use log::{debug, trace, warn};
 use reqwest::blocking::{Client, Response};
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
-use reqwest::header::USER_AGENT;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
@@ -377,10 +376,50 @@ pub type Issues = Vec<Issue>;
 pub type PullRequests = Vec<PullRequest>;
 pub type Comments = Vec<Comment>;
 
+/// Reads the GitHub API key from the file `~/.github/token`.
+fn read_github_token() -> Result<String, Box<dyn Error>> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let token_path = home_dir.join(".github").join("token");
+
+    match std::fs::read_to_string(&token_path) {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            if token.is_empty() {
+                warn!("GitHub token file {:?} is empty.", token_path);
+                Err("GitHub token file is empty".into())
+            } else {
+                debug!("Successfully read GitHub token from {:?}", token_path);
+                Ok(token)
+            }
+        }
+        Err(e) => {
+            debug!(
+                "Could not read GitHub token from {:?}: {}. Proceeding without token.",
+                token_path, e
+            );
+            Err(e.into()) // Propagate the error to indicate token wasn't read
+        }
+    }
+}
+
 /// Makes a basic HTTP GET request to the specified URL.
 fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("codehawk"));
+
+    if let Ok(token) = read_github_token() {
+        debug!("Using GitHub token for API request to {}", url);
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))?,
+        );
+    } else {
+        debug!(
+            "Proceeding with API request to {} without GitHub token.",
+            url
+        )
+    }
+
     let client = Client::new();
     debug!("Sending GET request to {}", url);
 
@@ -389,10 +428,14 @@ fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
         e
     })?;
 
-    debug!("Received response with status: {}", response.status());
+    debug!(
+        "Received response with status: {} for url {}",
+        response.status(),
+        url
+    );
 
     let response = response.error_for_status().map_err(|e| {
-        debug!("HTTP error status: {}", e);
+        debug!("HTTP error status for url {}: {}", url, e);
         e
     })?;
 
