@@ -20,11 +20,14 @@
 use chrono::{Days, SecondsFormat, Utc};
 use dirs;
 use log::{debug, trace, warn};
+use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, RETRY_AFTER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -402,7 +405,11 @@ fn read_github_token() -> Result<String, Box<dyn Error>> {
     }
 }
 
-/// Makes a basic HTTP GET request to the specified URL.
+const MAX_RETRIES: u32 = 5;
+
+const X_RATELIMIT_REMAINING: &str = "x-ratelimit-remaining";
+const X_RATELIMIT_RESET: &str = "x-ratelimit-reset";
+
 fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("codehawk"));
@@ -417,30 +424,181 @@ fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
         debug!(
             "Proceeding with API request to {} without GitHub token.",
             url
-        )
+        );
     }
 
     let client = Client::new();
-    debug!("Sending GET request to {}", url);
 
-    let response = client.get(url).headers(headers).send().map_err(|e| {
-        warn!("Request to {} failed: {}", url, e);
-        e
-    })?;
+    for attempt in 1..=MAX_RETRIES {
+        debug!(
+            "Sending GET request to {} (Attempt {}/{})",
+            url, attempt, MAX_RETRIES
+        );
 
-    debug!(
-        "Received response with status: {} for url {}",
-        response.status(),
-        url
-    );
+        let response_result = client.get(url).headers(headers.clone()).send();
 
-    let response = response.error_for_status().map_err(|e| {
-        debug!("HTTP error status for url {}: {}", url, e);
-        e
-    })?;
+        match response_result {
+            Ok(response) => {
+                let status = response.status();
+                debug!("Received response with status: {} for url {}", status, url);
 
-    trace!("Request to {} completed successfully", url);
-    Ok(response)
+                if status.is_success() {
+                    trace!("Request to {} completed successfully", url);
+                    return Ok(response);
+                }
+
+                if (status == StatusCode::FORBIDDEN
+                    || status == StatusCode::TOO_MANY_REQUESTS
+                    || status.is_server_error())
+                    && attempt < MAX_RETRIES
+                {
+                    let response_headers = response.headers().clone();
+                    let mut delay_duration = Duration::from_secs(5 * attempt as u64);
+
+                    if status == StatusCode::FORBIDDEN || status == StatusCode::TOO_MANY_REQUESTS {
+                        if let Some(retry_after_val) = response_headers.get(RETRY_AFTER) {
+                            if let Ok(retry_after_str) = retry_after_val.to_str() {
+                                if let Ok(seconds) = retry_after_str.parse::<u64>() {
+                                    delay_duration = Duration::from_secs(seconds);
+                                    warn!(
+                                        "Rate limited (status {}). Retrying after {} seconds (Retry-After header) for URL: {}",
+                                        status, seconds, url
+                                    );
+                                } else {
+                                    warn!(
+                                        "Rate limited (status {}). Could not parse Retry-After header value as seconds: \'{}\'. Using default backoff for URL: {}",
+                                        status, retry_after_str, url
+                                    );
+                                }
+                            }
+                        } else if let (Some(remaining_val), Some(reset_val)) = (
+                            response_headers.get(X_RATELIMIT_REMAINING),
+                            response_headers.get(X_RATELIMIT_RESET),
+                        ) {
+                            if let (Ok(remaining_str), Ok(reset_str)) =
+                                (remaining_val.to_str(), reset_val.to_str())
+                            {
+                                if let (Ok(remaining), Ok(reset_timestamp_epoch_secs)) =
+                                    (remaining_str.parse::<u64>(), reset_str.parse::<u64>())
+                                {
+                                    if remaining == 0 {
+                                        match SystemTime::now().duration_since(UNIX_EPOCH) {
+                                            Ok(current_time_since_epoch) => {
+                                                let current_timestamp_secs =
+                                                    current_time_since_epoch.as_secs();
+                                                if reset_timestamp_epoch_secs
+                                                    > current_timestamp_secs
+                                                {
+                                                    let wait_seconds = reset_timestamp_epoch_secs
+                                                        - current_timestamp_secs;
+                                                    let max_wait_seconds: u64 = 15 * 60;
+                                                    let actual_wait_seconds =
+                                                        wait_seconds.min(max_wait_seconds);
+                                                    delay_duration =
+                                                        Duration::from_secs(actual_wait_seconds);
+                                                    warn!(
+                                                        "Rate limited (status {}, X-RateLimit-Remaining: 0). Retrying after {} seconds (X-RateLimit-Reset: {}) for URL: {}",
+                                                        status,
+                                                        actual_wait_seconds,
+                                                        reset_timestamp_epoch_secs,
+                                                        url
+                                                    );
+                                                    if wait_seconds > max_wait_seconds {
+                                                        warn!(
+                                                            "Original X-RateLimit-Reset suggested {}s, capped to {}s for URL: {}",
+                                                            wait_seconds, max_wait_seconds, url
+                                                        );
+                                                    }
+                                                } else {
+                                                    warn!(
+                                                        "Rate limited (status {}, X-RateLimit-Remaining: 0), but reset time ({}) is in the past. Using default backoff for URL: {}",
+                                                        status, reset_timestamp_epoch_secs, url
+                                                    );
+                                                }
+                                            }
+                                            Err(e_time) => {
+                                                warn!(
+                                                    "Could not get current system time: {}. Using default backoff for URL: {}",
+                                                    e_time, url
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            "Status {} with X-RateLimit-Remaining: {}. This might not be a rate limit. Using default backoff for URL: {}",
+                                            status, remaining, url
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "Rate limited (status {}). Could not parse X-RateLimit headers as numbers. Using default backoff for URL: {}",
+                                        status, url
+                                    );
+                                }
+                            } else {
+                                warn!(
+                                    "Rate limited (status {}). X-RateLimit headers not valid strings. Using default backoff for URL: {}",
+                                    status, url
+                                );
+                            }
+                        } else {
+                            warn!(
+                                "Rate limited (status {}). No specific guidance headers (Retry-After, X-RateLimit-Reset with Remaining=0). Using default backoff for URL: {}",
+                                status, url
+                            );
+                        }
+                    } else if status.is_server_error() {
+                        warn!(
+                            "Server error (status {}). Retrying with backoff ({}s) for URL: {}",
+                            status,
+                            delay_duration.as_secs(),
+                            url
+                        );
+                    }
+
+                    debug!(
+                        "Sleeping for {:?} before retrying request to {}",
+                        delay_duration, url
+                    );
+                    thread::sleep(delay_duration);
+                    continue;
+                }
+
+                match response.error_for_status() {
+                    Ok(_should_not_happen_if_status_is_error) => {
+                        Err(format!(
+                            "HTTP status {} was not success but error_for_status returned Ok for URL: {}",
+                            status, url
+                        ))
+                    }
+                    Err(e) => {
+                        debug!(
+                            "HTTP error status for url {}: {} (after {} attempts)",
+                            url, e, attempt
+                        );
+                        Err(format!("{}", e).into())
+                    }
+                }?
+            }
+            Err(e) => {a
+                if attempt < MAX_RETRIES {
+                    let backoff_duration = Duration::from_secs(2 * attempt as u64);
+                    warn!(
+                        "Request to {} failed: {}. Retrying in {:?} (Attempt {}/{})",
+                        url, e, backoff_duration, attempt, MAX_RETRIES
+                    );
+                    thread::sleep(backoff_duration);
+                    continue;
+                }
+                warn!(
+                    "Request to {} failed after {} attempts: {}",
+                    url, MAX_RETRIES, e
+                );
+                return Err(e.into());
+            }
+        }
+    }
+    Err(format!("Exhausted {} retries for request to {}", MAX_RETRIES, url).into())
 }
 
 /// Makes an HTTP GET request to a standard GitHub URL (not the API).
