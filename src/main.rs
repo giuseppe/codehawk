@@ -175,6 +175,39 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
     Ok(r)
 }
 
+/// entrypoint for the grep_in_current_directory tool
+fn tool_grep_in_current_directory(params_str: &String) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        pattern: String,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    let mut cmd = Command::new("grep");
+    cmd.arg("-r");
+    cmd.arg("-n");
+    cmd.arg(&params.pattern);
+
+    debug!("Grepping for pattern '{}' in current directory", params.pattern);
+
+    trace!("Executing grep command: {:?}", cmd);
+    let output = cmd.output()?;
+    // Grep returns 1 if no lines were selected, 0 if lines were selected, >1 for errors.
+    // We consider no lines selected as a valid, empty result, not an error for the tool.
+    if !output.status.success() && output.status.code() != Some(1) {
+        let stderr = String::from_utf8(output.stderr)?;
+        let err_msg = format!("grep command failed with status {:?}. Stderr: {}", output.status, stderr);
+        let err: Box<dyn Error> = err_msg.into();
+        return Err(err);
+    }
+
+    let r = String::from_utf8(output.stdout)?;
+    debug!("Grep command successfully executed for pattern '{}'", params.pattern);
+    Ok(r)
+}
+
+
 /// entrypoint for the github_issue tool
 fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
@@ -426,6 +459,35 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                     "properties": {
                     },
                     "required": [
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "grep_in_current_directory".to_string(),
+        tool_grep_in_current_directory,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "grep_in_current_directory",
+                "description": "Grep for a pattern in the current directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "The pattern to search for."
+                        }
+                    },
+                    "required": [
+                        "pattern"
                     ],
                     "additionalProperties": false
                 }
