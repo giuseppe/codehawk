@@ -580,7 +580,7 @@ fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
                     }
                 }?
             }
-            Err(e) => {a
+            Err(e) => {
                 if attempt < MAX_RETRIES {
                     let backoff_duration = Duration::from_secs(2 * attempt as u64);
                     warn!(
