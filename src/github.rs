@@ -565,12 +565,10 @@ fn make_request(url: &String) -> Result<Response, Box<dyn Error>> {
                 }
 
                 match response.error_for_status() {
-                    Ok(_should_not_happen_if_status_is_error) => {
-                        Err(format!(
-                            "HTTP status {} was not success but error_for_status returned Ok for URL: {}",
-                            status, url
-                        ))
-                    }
+                    Ok(_should_not_happen_if_status_is_error) => Err(format!(
+                        "HTTP status {} was not success but error_for_status returned Ok for URL: {}",
+                        status, url
+                    )),
                     Err(e) => {
                         debug!(
                             "HTTP error status for url {}: {} (after {} attempts)",

@@ -189,7 +189,10 @@ fn tool_grep_in_current_directory(params_str: &String) -> Result<String, Box<dyn
     cmd.arg("-n");
     cmd.arg(&params.pattern);
 
-    debug!("Grepping for pattern '{}' in current directory", params.pattern);
+    debug!(
+        "Grepping for pattern '{}' in current directory",
+        params.pattern
+    );
 
     trace!("Executing grep command: {:?}", cmd);
     let output = cmd.output()?;
@@ -197,16 +200,21 @@ fn tool_grep_in_current_directory(params_str: &String) -> Result<String, Box<dyn
     // We consider no lines selected as a valid, empty result, not an error for the tool.
     if !output.status.success() && output.status.code() != Some(1) {
         let stderr = String::from_utf8(output.stderr)?;
-        let err_msg = format!("grep command failed with status {:?}. Stderr: {}", output.status, stderr);
+        let err_msg = format!(
+            "grep command failed with status {:?}. Stderr: {}",
+            output.status, stderr
+        );
         let err: Box<dyn Error> = err_msg.into();
         return Err(err);
     }
 
     let r = String::from_utf8(output.stdout)?;
-    debug!("Grep command successfully executed for pattern '{}'", params.pattern);
+    debug!(
+        "Grep command successfully executed for pattern '{}'",
+        params.pattern
+    );
     Ok(r)
 }
-
 
 /// entrypoint for the github_issue tool
 fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
@@ -609,6 +617,11 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
     tools
 }
 
+fn add_conservative_prompt(messages: &mut Vec<Message>) {
+    let conservative_prompt = "You are a helpful assistant.  You have access to various tools for file operations and code analysis.  Only use these tools when the user explicitly asks for file operations, code analysis, or repository interactions.  For simple questions, conversations, or general requests, respond directly without using tools.".to_string();
+    messages.push(make_message("system", conservative_prompt));
+}
+
 /// Sends a prompt to the OpenAI API and prints the AI's response to standard output.
 fn post_request_and_print_output(
     prompt: &String,
@@ -623,7 +636,11 @@ fn post_request_and_print_output(
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
-        endpoint: OPEN_ROUTER_URL.to_string(),
+        endpoint: opts
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
+        tool_choice: opts.tool_choice.clone(),
     };
 
     let tools = match opts.no_tools {
@@ -638,6 +655,12 @@ fn post_request_and_print_output(
     };
 
     let mut messages: Vec<Message> = vec![];
+
+    // Add conservative tool usage system prompt if tools are available but no explicit choice
+    if !tools.is_empty() && opts.tool_choice.is_none() {
+        add_conservative_prompt(&mut messages);
+    }
+
     if let Some(ref sys_prompts) = system_prompts {
         debug!("Using {} system prompts", sys_prompts.len());
         for sp in sys_prompts {
@@ -651,7 +674,9 @@ fn post_request_and_print_output(
     if let Some(choices) = response.choices {
         debug!("Received {} choices in response", choices.len());
         if let Some(choice) = choices.first() {
-            println!("{}", choice.message.content);
+            if let Some(content) = &choice.message.content {
+                println!("{}", content);
+            }
         }
     } else {
         warn!("No choices received in the AI response");
@@ -792,13 +817,22 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
         }
     };
 
+    // Add conservative tool usage system prompt if tools are available but no explicit choice
+    if !tools.is_empty() && opts.tool_choice.is_none() {
+        add_conservative_prompt(&mut messages);
+    }
+
     let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
     debug!("Using model: {}", model);
 
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
-        endpoint: OPEN_ROUTER_URL.to_string(),
+        endpoint: opts
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
+        tool_choice: opts.tool_choice.clone(),
     };
 
     loop {
@@ -822,7 +856,12 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
             } else {
                 println!("Current chat history:");
                 for (i, msg) in messages.iter().enumerate() {
-                    println!("{}: [{}] {}", i + 1, msg.role, msg.content);
+                    println!(
+                        "{}: [{}] {}",
+                        i + 1,
+                        msg.role,
+                        msg.content.as_ref().unwrap_or(&"<no content>".to_string())
+                    );
                     if let Some(tool_calls) = &msg.tool_calls {
                         if !tool_calls.is_empty() {
                             println!("  Tool Calls:");
@@ -897,7 +936,9 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
         if let Some(choices) = response.choices {
             debug!("Received {} choices in response", choices.len());
             if let Some(choice) = choices.first() {
-                println!("{}", choice.message.content);
+                if let Some(content) = &choice.message.content {
+                    println!("{}", content);
+                }
             }
         }
         messages = response.history;
@@ -966,11 +1007,17 @@ struct Opts {
     /// Specify the AI model to use
     model: Option<String>,
     #[clap(long)]
+    /// Override the endpoint URL to use
+    endpoint: Option<String>,
+    #[clap(long)]
     /// Inhibit usage of any tool
     no_tools: bool,
     /// Enable unsafe tools
     #[clap(long)]
     unsafe_tools: bool,
+    #[clap(long)]
+    /// Control when tools are used: "auto" (default), "none", "required"
+    tool_choice: Option<String>,
 
     #[clap(subcommand)]
     command: CliCommand,

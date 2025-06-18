@@ -30,6 +30,7 @@ pub struct Opts {
     pub max_tokens: Option<u32>,
     pub model: String,
     pub endpoint: String,
+    pub tool_choice: Option<String>,
 }
 
 pub type ToolCallback = fn(&String) -> Result<String, Box<dyn Error>>;
@@ -98,7 +99,8 @@ pub struct FunctionCall {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ToolCall {
-    pub index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u64>,
     pub id: String,
     #[serde(rename = "type")]
     pub tool_type: String,
@@ -111,14 +113,19 @@ pub struct OpenAIRequest {
     pub max_tokens: u32,
     pub messages: Vec<Message>,
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
@@ -258,7 +265,7 @@ fn tool_call(
 
     let msg = Message {
         role: "tool".to_string(),
-        content: content,
+        content: Some(content),
         tool_call_id: Some(req.id.clone()),
         name: Some(tool_name.clone()),
         tool_calls: None,
@@ -270,7 +277,7 @@ fn tool_call(
 pub fn make_message(role: &str, content: String) -> Message {
     Message {
         role: role.to_string(),
-        content: content,
+        content: Some(content),
         tool_calls: None,
         tool_call_id: None,
         name: None,
@@ -298,12 +305,22 @@ pub fn post_request(
         tools.push(tool_schema);
     }
 
+    let tool_choice = if tools.len() > 0 {
+        // If tools are available, use user's choice or default to "auto"
+        opts.tool_choice.clone()
+    } else {
+        None
+    };
+
     let request_body = OpenAIRequest {
         model: opts.model.clone(),
         max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
         messages: messages,
         tools: if tools.len() > 0 { Some(tools) } else { None },
+        tool_choice: tool_choice,
     };
+
+    trace!("Send request {:?}", serde_json::to_string(&request_body)?);
 
     let client = ReqwestClient::builder()
         .timeout(Duration::from_secs(1000))
