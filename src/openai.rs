@@ -366,6 +366,8 @@ pub fn post_request(
         .into());
     }
 
+    let mut finish: bool = false;
+
     let mut tool_call_messages: Vec<Message> = vec![];
     if let Some(choices) = &openai_response.choices {
         trace!("Got {} choices", choices.len());
@@ -375,6 +377,7 @@ pub fn post_request(
                 .finish_reason
                 .clone()
                 .unwrap_or_else(|| "".to_string());
+            finish = finish_reason != "" && finish_reason != "tool_calls";
             if finish_reason == "error" {
                 let native_finish_reason = choice
                     .native_finish_reason
@@ -398,8 +401,8 @@ pub fn post_request(
             }
         }
     }
-    // If there were tool requests, repeat the request with the new results
-    if tool_call_messages.len() > 0 {
+
+    if !finish {
         info!(
             "Repeat request with {} new messages from tools",
             tool_call_messages.len()
