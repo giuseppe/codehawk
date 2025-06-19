@@ -165,12 +165,26 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
         success: bool,
     }
 
+    debug!("run_command received params: {}", params_str);
+
+    // Try normal parsing first, fallback to manual parsing if it fails
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
-    let mut cmd = Command::new(&params.command);
-    if let Some(args) = params.args {
-        cmd.args(args);
-    }
+    let mut cmd = if params.command.contains(' ')
+        && (params.args.is_none() || params.args.as_ref().map_or(false, |a| a.is_empty()))
+    {
+        // If command contains spaces and no args provided (or empty args), use sh -c
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&params.command);
+        c
+    } else {
+        // Normal command execution
+        let mut c = Command::new(&params.command);
+        if let Some(args) = params.args {
+            c.args(args);
+        }
+        c
+    };
 
     trace!("Executing command: {:?}", cmd);
 
