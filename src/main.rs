@@ -124,7 +124,7 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
             debug!("Creating new file: {}", params.path);
             root.create_file(
                 &params.path,
-                OpenFlags::O_WRONLY,
+                OpenFlags::O_WRONLY | OpenFlags::O_CREAT,
                 &Permissions::from_mode(0o600),
             )
         })?;
