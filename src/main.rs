@@ -87,12 +87,16 @@ fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 
     let root = Root::open(".")?;
     let path = PathBuf::from(&params.path);
-    let mut file = root.open_subpath(path, OpenFlags::O_RDONLY)?;
+    let file = root.open_subpath(path, OpenFlags::O_RDONLY);
 
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-
-    Ok(contents)
+    match file {
+        Ok(mut file) => {
+            let mut contents = String::new();
+            file.read_to_string(&mut contents)?;
+            Ok(contents)
+        }
+        Err(_) => Ok("".to_string()),
+    }
 }
 
 /// entrypoint for the write_file tool
