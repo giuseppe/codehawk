@@ -599,7 +599,7 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Arguments to pass to the command, e.g. ["-l", "-a"]"
+                            "description": "Arguments to pass to the command, e.g. [\"-l\", \"-a\"]"
                         }
                     },
                     "required": [
