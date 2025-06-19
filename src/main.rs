@@ -149,10 +149,20 @@ fn tool_list_git_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
 
 /// entrypoint for the run_command tool
 fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
+    use serde::Serialize;
+
     #[derive(Deserialize)]
     struct Params {
         command: String,
         args: Option<Vec<String>>,
+    }
+
+    #[derive(Serialize)]
+    struct CommandResult {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i32>,
+        success: bool,
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
@@ -163,16 +173,45 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
     }
 
     trace!("Executing command: {:?}", cmd);
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
-        let err: Box<dyn Error> = stderr.into();
-        return Err(err);
-    }
 
-    let r = String::from_utf8(output.stdout)?;
-    debug!("Successfully run command {}", params.command);
-    Ok(r)
+    let result = match cmd.output() {
+        Ok(output) => {
+            let stdout = String::from_utf8(output.stdout)
+                .unwrap_or_else(|_| "<non-utf8 output>".to_string());
+            let stderr = String::from_utf8(output.stderr)
+                .unwrap_or_else(|_| "<non-utf8 output>".to_string());
+            let exit_code = output.status.code();
+            let success = output.status.success();
+
+            if success {
+                debug!("Successfully run command {}", params.command);
+            } else {
+                debug!(
+                    "Command {} failed with exit code {:?}",
+                    params.command, exit_code
+                );
+            }
+
+            CommandResult {
+                stdout,
+                stderr,
+                exit_code,
+                success,
+            }
+        }
+        Err(e) => {
+            debug!("Failed to execute command {}: {}", params.command, e);
+            CommandResult {
+                stdout: String::new(),
+                stderr: format!("Failed to execute command: {}", e),
+                exit_code: None,
+                success: false,
+            }
+        }
+    };
+
+    let json_result = serde_json::to_string(&result)?;
+    Ok(json_result)
 }
 
 /// entrypoint for the grep_in_current_directory tool
@@ -586,7 +625,7 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Run a command and gets it output.",
+                "description": "Run a command and return results in JSON format. Returns {\"stdout\": string, \"stderr\": string, \"exit_code\": number|null, \"success\": boolean}. Commands do not fail on non-zero exit codes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
