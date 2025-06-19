@@ -1151,8 +1151,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init_from_env(env);
 
     // Parse command line arguments
-    let opts = Opts::parse();
+    let mut opts = Opts::parse();
     debug!("Command line options parsed");
+
+    // Reset the model to use if an endpoint was provided
+    if opts.model.is_none() && opts.endpoint.is_some() {
+        opts.model = Some("".to_string());
+    }
 
     // Execute the chosen command
     let result = match &opts.command {
