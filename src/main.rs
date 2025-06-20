@@ -929,6 +929,16 @@ fn chat_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
             }
             continue;
         }
+        if line.starts_with("\\system ") {
+            let system_message = line.strip_prefix("\\system ").unwrap_or("").to_string();
+            if !system_message.is_empty() {
+                messages.push(make_message("system", system_message));
+                println!("System message added to conversation.");
+            } else {
+                println!("Usage: \\system <message>");
+            }
+            continue;
+        }
 
         messages.push(make_message("user", line));
 
