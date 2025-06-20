@@ -46,7 +46,7 @@ use openai::{
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL: &str = "google/gemini-2.5-pro-preview";
+const DEFAULT_MODEL: &str = "google/gemini-2.5-pro";
 const DEFAULT_DAYS: u64 = 7;
 
 fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
