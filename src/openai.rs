@@ -529,14 +529,16 @@ fn post_request_with_mode_and_recursion(
                     .finish_reason
                     .clone()
                     .unwrap_or_else(|| "".to_string());
-                finish = finish_reason != "" && finish_reason != "tool_calls";
+                // Ignore tool_calls finish_reason if no tools are available
+                finish = finish_reason != ""
+                    && (finish_reason != "tool_calls" || tools_collection.is_empty());
                 if finish_reason == "error" {
                     let native_finish_reason = choice
                         .native_finish_reason
                         .clone()
                         .unwrap_or_else(|| finish_reason);
                     return Err(format!("got API error: {}", native_finish_reason).into());
-                } else if finish_reason == "tool_calls" {
+                } else if finish_reason == "tool_calls" && !tools_collection.is_empty() {
                     let tool_calls = choice
                         .message
                         .tool_calls
