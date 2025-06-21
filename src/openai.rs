@@ -863,7 +863,10 @@ fn handle_streaming_response(
             .collect();
 
         if valid_calls.is_empty() {
-            warn!("All tool calls were invalid and dropped");
+            warn!("All tool calls were invalid and dropped, clearing finish_reason");
+            // If all tool calls were invalid, clear finish_reason to continue conversation
+            // instead of causing "Invalid response" error or premature exit
+            finish_reason = None;
             None
         } else {
             let mut sorted_calls = valid_calls;
