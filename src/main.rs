@@ -1091,6 +1091,7 @@ fn post_request_and_print_output(
             .clone()
             .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
         tool_choice: opts.tool_choice.clone(),
+        api_key: opts.api_key.clone(),
     };
 
     let tools = match opts.no_tools {
@@ -1290,6 +1291,7 @@ fn chat_command(
             .clone()
             .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
         tool_choice: opts.tool_choice.clone(),
+        api_key: opts.api_key.clone(),
     };
 
     loop {
@@ -1781,6 +1783,9 @@ struct Opts {
     #[clap(long)]
     /// Control when tools are used: "auto" (default), "none", "required"
     tool_choice: Option<String>,
+    #[clap(long)]
+    /// Override the file path to read API key from
+    api_key: Option<String>,
 
     #[clap(subcommand)]
     command: CliCommand,

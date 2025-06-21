@@ -32,6 +32,7 @@ pub struct Opts {
     pub model: String,
     pub endpoint: String,
     pub tool_choice: Option<String>,
+    pub api_key: Option<String>,
 }
 
 pub type ToolCallback = fn(&String) -> Result<String, Box<dyn Error>>;
@@ -45,10 +46,14 @@ const MAX_TOKENS: u32 = 16384;
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const OPEN_ROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
-/// Reads the OpenRouter API key from the file `~/.openrouter/key`.
-fn read_api_key() -> Result<String, Box<dyn Error>> {
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let key_path = home_dir.join(".openrouter").join("key");
+/// Reads the API key from the specified file or the default OpenRouter key file.
+fn read_api_key(api_key_file: Option<&String>) -> Result<String, Box<dyn Error>> {
+    let key_path = if let Some(custom_path) = api_key_file {
+        std::path::PathBuf::from(custom_path)
+    } else {
+        let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+        home_dir.join(".openrouter").join("key")
+    };
 
     let api_key = std::fs::read_to_string(key_path)?;
 
@@ -430,8 +435,11 @@ fn post_request_with_mode_and_recursion(
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-        if opts.endpoint == OPEN_ROUTER_URL || opts.endpoint == OPEN_ROUTER_MODELS_URL {
-            let api_key = read_api_key()?;
+        if opts.endpoint == OPEN_ROUTER_URL
+            || opts.endpoint == OPEN_ROUTER_MODELS_URL
+            || opts.api_key.is_some()
+        {
+            let api_key = read_api_key(opts.api_key.as_ref())?;
             let bearer_auth = format!("Bearer {}", &api_key);
             headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
         }
