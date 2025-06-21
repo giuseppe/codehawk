@@ -208,6 +208,7 @@ pub struct Delta {
 pub struct StreamingResponse {
     pub choices: Option<Vec<StreamingChoice>>,
     pub error: Option<OpenAIError>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone)]
@@ -677,6 +678,7 @@ fn handle_streaming_response(
     let mut accumulated_content = String::new();
     let mut accumulated_tool_calls: HashMap<usize, ToolCall> = HashMap::new();
     let mut finish_reason: Option<String> = None;
+    let mut usage: Option<Usage> = None;
     let mut in_tool_mode = false;
     let mut bytes_read = 0usize;
     let mut chunks_processed = 0u32;
@@ -831,6 +833,11 @@ fn handle_streaming_response(
                 }
             }
         }
+
+        // Capture usage information if available in this chunk
+        if let Some(chunk_usage) = streaming_response.usage {
+            usage = Some(chunk_usage);
+        }
     }
 
     // Ensure we call the handler one final time to flush output
@@ -895,9 +902,7 @@ fn handle_streaming_response(
         native_finish_reason: None,
     };
 
-    // For streaming responses, we don't have accurate token counts from the server
-    // Don't provide any usage information unless we get it from the API
-    let usage = None;
+    // Use captured usage information from streaming response if available
 
     Ok(OpenAIResponse {
         error: None,
