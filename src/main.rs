@@ -1072,6 +1072,21 @@ fn add_predefined_system_prompts(messages: &mut Vec<Message>) {
     }
 }
 
+fn initialize_chat_messages(tools: &ToolsCollection, opts: &Opts) -> Vec<Message> {
+    let mut messages: Vec<Message> = vec![];
+
+    // Add predefined system prompts that are always loaded
+    add_predefined_system_prompts(&mut messages);
+
+    // Add conservative tool usage system prompt if tools are available but no explicit choice
+    if !tools.is_empty() && opts.tool_choice.is_none() {
+        add_conservative_prompt(&mut messages);
+    }
+
+    debug!("Initialized chat with {} system messages", messages.len());
+    messages
+}
+
 /// Sends a prompt to the OpenAI API and prints the AI's response to standard output.
 fn post_request_and_print_output(
     prompt: &String,
@@ -1259,7 +1274,6 @@ fn chat_command(
     debug!("Executing chat command");
 
     let mut rl = DefaultEditor::new()?;
-    let mut messages: Vec<Message> = vec![];
     let tools = match opts.no_tools {
         true => {
             debug!("Tools are disabled");
@@ -1271,14 +1285,7 @@ fn chat_command(
         }
     };
 
-    // Add predefined system prompts that are always loaded
-    add_predefined_system_prompts(&mut messages);
-
-    // Add conservative tool usage system prompt if tools are available but no explicit choice
-    if !tools.is_empty() && opts.tool_choice.is_none() {
-        add_conservative_prompt(&mut messages);
-    }
-    debug!("Initial message count after setup: {}", messages.len());
+    let mut messages = initialize_chat_messages(&tools, opts);
 
     let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
     debug!("Using model: {}", model);
@@ -1306,8 +1313,8 @@ fn chat_command(
             return Ok(());
         }
         if line == "\\clear" {
-            messages = vec![];
-            println!("Chat history cleared.");
+            messages = initialize_chat_messages(&tools, opts);
+            println!("Chat history cleared and system prompts restored.");
             continue;
         }
         if line == "\\show" {
@@ -1347,7 +1354,7 @@ fn chat_command(
                 if let Ok(n) = parts[1].parse::<usize>() {
                     if n == 0 {
                         println!("Limit cannot be zero. Clearing history instead.");
-                        messages = vec![];
+                        messages = initialize_chat_messages(&tools, opts);
                     } else if messages.len() > n {
                         // Keep the last n messages. System messages might be lost if not handled.
                         // Assuming simple user/assistant history for now.
@@ -1376,7 +1383,7 @@ fn chat_command(
                             n,
                             messages.len()
                         );
-                        messages = vec![];
+                        messages = initialize_chat_messages(&tools, opts);
                     } else {
                         messages.truncate(messages.len() - n);
                         println!("Went back {} steps in chat history.", n);
