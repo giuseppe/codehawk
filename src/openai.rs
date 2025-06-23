@@ -35,7 +35,7 @@ pub struct Opts {
     pub api_key: Option<String>,
 }
 
-pub type ToolCallback = fn(&String) -> Result<String, Box<dyn Error>>;
+pub type ToolCallback = fn(&String, &crate::ToolContext) -> Result<String, Box<dyn Error>>;
 pub type ToolsCollection = HashMap<String, ToolItem>;
 pub struct ToolItem {
     pub callback: ToolCallback,
@@ -342,6 +342,7 @@ pub fn list_models() -> Result<Vec<ModelInfo>, Box<dyn Error>> {
 fn tool_call(
     tools_collection: &ToolsCollection,
     req: &ToolCall,
+    ctx: &crate::ToolContext,
 ) -> Result<Message, Box<dyn Error>> {
     let tool_name = &req.function.name;
 
@@ -370,7 +371,7 @@ fn tool_call(
                 "Passing arguments {:?} to tool {}",
                 req.function.arguments, tool_name
             );
-            match (t.callback)(&req.function.arguments) {
+            match (t.callback)(&req.function.arguments, ctx) {
                 Ok(result) => result,
                 Err(e) => {
                     let error_msg = format!("error: tool '{}' failed: {}", tool_name, e);
@@ -409,8 +410,15 @@ pub fn post_request(
     messages: Vec<Message>,
     tools_collection: &ToolsCollection,
     opts: &Opts,
+    ctx: &crate::ToolContext,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
-    post_request_with_mode(messages, tools_collection, opts, ResponseMode::Complete)
+    post_request_with_mode(
+        messages,
+        tools_collection,
+        opts,
+        ResponseMode::Complete,
+        ctx,
+    )
 }
 
 pub fn post_request_with_mode(
@@ -418,8 +426,9 @@ pub fn post_request_with_mode(
     tools_collection: &ToolsCollection,
     opts: &Opts,
     mode: ResponseMode,
+    ctx: &crate::ToolContext,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
-    post_request_with_mode_and_recursion(messages, tools_collection, opts, mode)
+    post_request_with_mode_and_recursion(messages, tools_collection, opts, mode, ctx)
 }
 
 /// Internal function with iterative tool call handling.
@@ -428,6 +437,7 @@ fn post_request_with_mode_and_recursion(
     tools_collection: &ToolsCollection,
     opts: &Opts,
     mode: ResponseMode,
+    ctx: &crate::ToolContext,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
     let start_time = Instant::now();
     let mut messages = messages;
@@ -588,7 +598,7 @@ fn post_request_with_mode_and_recursion(
                         }
 
                         let tool_start_time = start_time.elapsed();
-                        let msg = tool_call(&tools_collection, tool_call_request)?;
+                        let msg = tool_call(&tools_collection, tool_call_request, ctx)?;
                         let tool_duration = start_time.elapsed() - tool_start_time;
 
                         // Show progress for tool execution completion

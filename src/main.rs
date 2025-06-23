@@ -21,7 +21,7 @@ mod github;
 mod openai;
 
 use clap::{Parser, Subcommand};
-use console::{Term, style};
+use console::Style;
 use env_logger::Env;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
@@ -53,6 +53,9 @@ const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-pro";
 const DEFAULT_DAYS: u64 = 7;
 
+// Import ToolContext from the library crate
+use codehawk::ToolContext;
+
 fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
     let item = ToolItem {
         callback: callback,
@@ -63,7 +66,7 @@ fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback
 }
 
 /// entrypoint for the delete_path tool
-fn tool_delete_path(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_delete_path(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         path: String,
@@ -80,7 +83,7 @@ fn tool_delete_path(params_str: &String) -> Result<String, Box<dyn Error>> {
 }
 
 /// entrypoint for the read_file tool
-fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_read_file(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     use serde::Serialize;
 
     #[derive(Deserialize)]
@@ -127,7 +130,7 @@ fn tool_read_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 }
 
 /// entrypoint for the write_file tool
-fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_write_file(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         path: String,
@@ -161,7 +164,7 @@ fn tool_write_file(params_str: &String) -> Result<String, Box<dyn Error>> {
 }
 
 /// entrypoint for the list_git_files tool
-fn tool_list_git_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_list_git_files(_params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     let mut cmd = Command::new("git");
     cmd.arg("ls-files");
 
@@ -178,325 +181,8 @@ fn tool_list_git_files(_params_str: &String) -> Result<String, Box<dyn Error>> {
     Ok(r)
 }
 
-/// Helper function to wrap text to fit within a given width
-fn wrap_text_to_width(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        if line.len() <= width {
-            lines.push(line.to_string());
-        } else {
-            // Split long lines at word boundaries when possible
-            let mut current_line = String::new();
-            for word in line.split_whitespace() {
-                if current_line.is_empty() {
-                    if word.len() > width {
-                        // Word is too long, split it
-                        let mut remaining = word;
-                        while remaining.len() > width {
-                            lines.push(remaining[..width].to_string());
-                            remaining = &remaining[width..];
-                        }
-                        if !remaining.is_empty() {
-                            current_line = remaining.to_string();
-                        }
-                    } else {
-                        current_line = word.to_string();
-                    }
-                } else if current_line.len() + 1 + word.len() <= width {
-                    current_line.push(' ');
-                    current_line.push_str(word);
-                } else {
-                    lines.push(current_line);
-                    if word.len() > width {
-                        // Word is too long, split it
-                        let mut remaining = word;
-                        while remaining.len() > width {
-                            lines.push(remaining[..width].to_string());
-                            remaining = &remaining[width..];
-                        }
-                        current_line = remaining.to_string();
-                    } else {
-                        current_line = word.to_string();
-                    }
-                }
-            }
-            if !current_line.is_empty() {
-                lines.push(current_line);
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-
-    lines
-}
-
-/// State for tracking streaming box updates
-struct StreamingBoxState {
-    title: String,
-    content: String,
-    color: Option<String>,
-    content_width: usize,
-    max_content_lines: usize,
-    lines_printed: usize,
-}
-
-impl StreamingBoxState {
-    fn new(title: String, color: Option<&str>) -> Self {
-        let term = Term::stdout();
-        let term_width = term.size().1 as usize;
-        let box_width = if term_width < 20 {
-            20
-        } else {
-            term_width.saturating_sub(2)
-        };
-        let content_width = box_width.saturating_sub(4);
-
-        Self {
-            title,
-            content: String::new(),
-            color: color.map(|c| c.to_string()),
-            content_width,
-            max_content_lines: 15,
-            lines_printed: 0,
-        }
-    }
-
-    fn append_content(&mut self, new_content: &str) {
-        self.content.push_str(new_content);
-        print!("{}", new_content);
-        use std::io::{Write, stdout};
-        let _ = stdout().flush();
-    }
-
-    fn draw_box(&self, _box_width: usize) -> usize {
-        let mut line_count = 0;
-
-        let title_lines = wrap_text_to_width(&self.title, self.content_width);
-        for line in title_lines {
-            println!("📦 {}", line);
-            line_count += 1;
-        }
-        line_count += 1;
-
-        if self.content.is_empty() {
-            let building_text = "(building...)";
-            println!("   {}", building_text);
-            line_count += 1;
-        } else {
-            let lines = self.content.lines().collect::<Vec<_>>();
-
-            for line in lines.iter().take(self.max_content_lines) {
-                let wrapped_lines = wrap_text_to_width(line, self.content_width);
-                for wrapped_line in wrapped_lines {
-                    let renderer = BoxRenderer::new();
-                    let display_line =
-                        renderer.apply_color_style(&wrapped_line, self.color.as_deref());
-
-                    println!("   {}", display_line);
-                    line_count += 1;
-                }
-            }
-
-            if lines.len() > self.max_content_lines {
-                let truncate_text = "... (more content follows)";
-                println!("   {}", truncate_text);
-                line_count += 1;
-            }
-        }
-        line_count += 1;
-
-        line_count
-    }
-
-    fn start(&mut self) {
-        println!();
-
-        let term_width = Term::stdout().size().1 as usize;
-        let box_width = if term_width < 20 {
-            20
-        } else {
-            term_width.saturating_sub(2)
-        };
-        self.lines_printed = self.draw_box(box_width);
-    }
-}
-
-/// Box renderer for consistent box display across the application
-struct BoxRenderer {
-    content_width: usize,
-}
-
-impl BoxRenderer {
-    fn new() -> Self {
-        let term = Term::stdout();
-        let term_width = term.size().1 as usize;
-        let box_width = if term_width < 20 {
-            20
-        } else {
-            term_width.saturating_sub(2)
-        };
-        let content_width = box_width.saturating_sub(4);
-
-        Self { content_width }
-    }
-
-    fn render_title(&self, title: &str) {
-        let title_lines = wrap_text_to_width(title, self.content_width);
-        for line in title_lines {
-            println!("📦 {}", line);
-        }
-    }
-
-    fn apply_color_style(&self, text: &str, color: Option<&str>) -> String {
-        if let Some(c) = color {
-            let styled = match c {
-                "green" => style(text).green(),
-                "red" => style(text).red(),
-                "yellow" => style(text).yellow(),
-                "cyan" => style(text).cyan(),
-                _ => style(text),
-            };
-            styled.to_string()
-        } else {
-            text.to_string()
-        }
-    }
-
-    fn render_content_lines(
-        &self,
-        content: &str,
-        color: Option<&str>,
-        max_lines: usize,
-        truncation_msg: &str,
-        empty_msg: &str,
-    ) {
-        if content.is_empty() {
-            println!("   {}", empty_msg);
-            return;
-        }
-
-        let lines = content.lines().collect::<Vec<_>>();
-
-        for line in lines.iter().take(max_lines) {
-            let wrapped_lines = wrap_text_to_width(line, self.content_width);
-            for wrapped_line in wrapped_lines {
-                let display_line = self.apply_color_style(&wrapped_line, color);
-                println!("   {}", display_line);
-            }
-        }
-
-        if lines.len() > max_lines {
-            println!("   {}", truncation_msg);
-        }
-    }
-
-    fn flush_output(&self) {
-        use std::io::{Write, stdout};
-        let _ = stdout().flush();
-    }
-}
-
-/// Function to display streaming content in a box
-fn display_streaming_box(title: &str, content: &str, color: Option<&str>) {
-    let renderer = BoxRenderer::new();
-
-    println!();
-
-    renderer.render_title(title);
-    renderer.render_content_lines(
-        content,
-        color,
-        15,
-        "... (more content follows)",
-        "(building...)",
-    );
-    renderer.flush_output();
-}
-
-/// Generic function to display content in a box
-fn display_content_in_box(title: &str, sections: Vec<(&str, &str, Option<&str>)>) {
-    let renderer = BoxRenderer::new();
-
-    renderer.render_title(title);
-
-    // Content sections
-    for (_i, (section_title, content, color_opt)) in sections.iter().enumerate() {
-        // Section title
-        if !section_title.is_empty() {
-            let styled_title = if let Some(color) = color_opt {
-                match *color {
-                    "green" => style(section_title).bold().green().to_string(),
-                    "red" => style(section_title).bold().red().to_string(),
-                    _ => section_title.to_string(),
-                }
-            } else {
-                section_title.to_string()
-            };
-
-            println!("🔸 {}", styled_title);
-        }
-
-        // Section content
-        let max_lines = if section_title.to_uppercase().contains("STDERR") {
-            10
-        } else {
-            20
-        };
-
-        renderer.render_content_lines(
-            content,
-            None, // sections don't use content coloring
-            max_lines,
-            "... (output truncated)",
-            "(no output)",
-        );
-    }
-}
-
-/// Helper function to display command output in a box
-fn display_command_output_box(
-    command: &str,
-    stdout: &str,
-    stderr: &str,
-    exit_code: Option<i32>,
-    success: bool,
-) {
-    let title = if success {
-        format!("✅ Command: {} (exit: {})", command, exit_code.unwrap_or(0))
-    } else {
-        format!(
-            "❌ Command: {} (exit: {})",
-            command,
-            exit_code.unwrap_or(-1)
-        )
-    };
-
-    let mut sections = Vec::new();
-
-    if !stdout.is_empty() {
-        sections.push(("STDOUT:", stdout, Some("green")));
-    }
-
-    if !stderr.is_empty() {
-        sections.push(("STDERR:", stderr, Some("red")));
-    }
-
-    if stdout.is_empty() && stderr.is_empty() {
-        sections.push(("", "", None));
-    }
-
-    display_content_in_box(&title, sections);
-}
-
 /// entrypoint for the run_command tool
-fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_run_command(params_str: &String, ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     use serde::Serialize;
 
     #[derive(Deserialize)]
@@ -552,6 +238,30 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
                 );
             }
 
+            // Display output directly using context callback
+            if success {
+                ctx.println("✅ Command executed successfully:");
+            } else {
+                ctx.println(&format!(
+                    "❌ Command failed (exit code: {}):",
+                    exit_code.unwrap_or(-1)
+                ));
+            }
+            if !stdout.is_empty() {
+                ctx.println("STDOUT:");
+                for line in stdout.lines() {
+                    ctx.println(&format!("  {}", line));
+                }
+            }
+            if !stderr.is_empty() {
+                ctx.println("STDERR:");
+                for line in stderr.lines() {
+                    ctx.println(&format!("  {}", line));
+                }
+            }
+            if stdout.is_empty() && stderr.is_empty() {
+                ctx.println("(no output)");
+            }
             CommandResult {
                 stdout,
                 stderr,
@@ -561,6 +271,7 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
         }
         Err(e) => {
             debug!("Failed to execute command {}: {}", params.command, e);
+            ctx.println(&format!("ERROR: Failed to execute command: {}", e));
             CommandResult {
                 stdout: String::new(),
                 stderr: format!("Failed to execute command: {}", e),
@@ -570,50 +281,17 @@ fn tool_run_command(params_str: &String) -> Result<String, Box<dyn Error>> {
         }
     };
 
-    // Display the command output in a box
-    let display_command = if params.command.contains(' ') {
-        params.command.clone()
-    } else {
-        let mut full_cmd = params.command.clone();
-        if let Some(args) = &params.args {
-            if !args.is_empty() {
-                full_cmd.push_str(" ");
-                // Handle potential JSON string in args for display only
-                let args_display: Vec<String> = args
-                    .iter()
-                    .map(|arg| {
-                        if arg.starts_with('[') && arg.ends_with(']') {
-                            // This might be a JSON array string, try to parse for display
-                            if let Ok(parsed_args) = serde_json::from_str::<Vec<String>>(arg) {
-                                parsed_args.join(" ")
-                            } else {
-                                arg.clone()
-                            }
-                        } else {
-                            arg.clone()
-                        }
-                    })
-                    .collect();
-                full_cmd.push_str(&args_display.join(" "));
-            }
-        }
-        full_cmd
-    };
-
-    display_command_output_box(
-        &display_command,
-        &result.stdout,
-        &result.stderr,
-        result.exit_code,
-        result.success,
-    );
+    // Output is now displayed directly above during command execution
 
     let json_result = serde_json::to_string(&result)?;
     Ok(json_result)
 }
 
 /// entrypoint for the grep_in_current_directory tool
-fn tool_grep_in_current_directory(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_grep_in_current_directory(
+    params_str: &String,
+    ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         pattern: String,
@@ -650,11 +328,32 @@ fn tool_grep_in_current_directory(params_str: &String) -> Result<String, Box<dyn
         "Grep command successfully executed for pattern '{}'",
         params.pattern
     );
+
+    // Display grep results directly using context callback
+    ctx.println(&format!(
+        "🔍 Grep results for pattern '{}':",
+        params.pattern
+    ));
+
+    if r.is_empty() {
+        ctx.println("(no matches found)");
+    } else {
+        let line_count = r.lines().count();
+        ctx.println(&format!("Found {} matches:", line_count));
+        for line in r.lines().take(10) {
+            // Show first 10 matches
+            ctx.println(&format!("  {}", line));
+        }
+        if line_count > 10 {
+            ctx.println(&format!("  ... and {} more matches", line_count - 10));
+        }
+    }
+
     Ok(r)
 }
 
 /// entrypoint for the github_issue tool
-fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_github_issue(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         repo: String,
@@ -671,7 +370,10 @@ fn tool_github_issue(params_str: &String) -> Result<String, Box<dyn Error>> {
 }
 
 /// entrypoint for the github_issue_comments tool
-fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_github_issue_comments(
+    params_str: &String,
+    _ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         repo: String,
@@ -690,7 +392,10 @@ fn tool_github_issue_comments(params_str: &String) -> Result<String, Box<dyn Err
 }
 
 /// entrypoint for the github_pull_request tool
-fn tool_github_pull_request(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_github_pull_request(
+    params_str: &String,
+    _ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         repo: String,
@@ -709,7 +414,10 @@ fn tool_github_pull_request(params_str: &String) -> Result<String, Box<dyn Error
 }
 
 /// entrypoint for the github_pull_request_patch tool
-fn tool_github_pull_request_patch(params_str: &String) -> Result<String, Box<dyn Error>> {
+fn tool_github_pull_request_patch(
+    params_str: &String,
+    _ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         repo: String,
@@ -1135,7 +843,12 @@ fn post_request_and_print_output(
     }
     messages.push(make_message("user", prompt.clone()));
 
-    let response: OpenAIResponse = post_request(messages, &tools, &openai_opts)?;
+    // Create a simple ToolContext that prints to stdout
+    let tool_context = ToolContext::new(|msg: &str| {
+        println!("{}", msg);
+    });
+
+    let response: OpenAIResponse = post_request(messages, &tools, &openai_opts, &tool_context)?;
 
     if let Some(choices) = response.choices {
         debug!("Received {} choices in response", choices.len());
@@ -1273,7 +986,13 @@ fn chat_command(
 ) -> Result<(), Box<dyn Error>> {
     debug!("Executing chat command");
 
+    // Create a persistent streaming progress bar for chat messages
+    let chat_pb = global_multi_progress.add(ProgressBar::no_length());
+    chat_pb.set_style(ProgressStyle::with_template("{msg}")?);
+
+    // Create rustyline editor with history
     let mut rl = DefaultEditor::new()?;
+
     let tools = match opts.no_tools {
         true => {
             debug!("Tools are disabled");
@@ -1302,11 +1021,31 @@ fn chat_command(
     };
 
     loop {
-        let line = rl.readline("> ")?.trim().to_string();
+        // Clear any active progress bars before showing input prompt
+        global_multi_progress.clear()?;
+
+        let line = match rl.readline("> ") {
+            Ok(line) => {
+                let trimmed = line.trim().to_string();
+                if !trimmed.is_empty() {
+                    rl.add_history_entry(&trimmed)?;
+                }
+                trimmed
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                continue;
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(Box::new(err));
+            }
+        };
+
         if line.is_empty() {
             continue;
         }
-        rl.add_history_entry(line.as_str())?;
         debug!("User input: '{}' (length: {})", line, line.len());
 
         if line == "\\quit" {
@@ -1314,33 +1053,36 @@ fn chat_command(
         }
         if line == "\\clear" {
             messages = initialize_chat_messages(&tools, opts);
-            println!("Chat history cleared and system prompts restored.");
+            chat_pb.println("Chat history cleared and system prompts restored.");
             continue;
         }
         if line == "\\show" {
             if messages.is_empty() {
-                println!("Chat history is empty.");
+                chat_pb.println("Chat history is empty.");
             } else {
-                println!("Current chat history:");
+                chat_pb.println("Current chat history:");
                 for (i, msg) in messages.iter().enumerate() {
-                    println!(
+                    chat_pb.println(&format!(
                         "{}: [{}] {}",
                         i + 1,
                         msg.role,
                         msg.content.as_ref().unwrap_or(&"<no content>".to_string())
-                    );
+                    ));
                     if let Some(tool_calls) = &msg.tool_calls {
                         if !tool_calls.is_empty() {
-                            println!("  Tool Calls:");
+                            chat_pb.println("  Tool Calls:");
                             for (j, tool_call) in tool_calls.iter().enumerate() {
-                                println!(
+                                chat_pb.println(&format!(
                                     "    {}.{}: {} ({})",
                                     i + 1,
                                     j + 1,
                                     tool_call.function.name,
                                     tool_call.id
-                                );
-                                println!("      Args: {}", tool_call.function.arguments);
+                                ));
+                                chat_pb.println(&format!(
+                                    "      Args: {}",
+                                    tool_call.function.arguments
+                                ));
                             }
                         }
                     }
@@ -1353,21 +1095,25 @@ fn chat_command(
             if parts.len() == 2 {
                 if let Ok(n) = parts[1].parse::<usize>() {
                     if n == 0 {
-                        println!("Limit cannot be zero. Clearing history instead.");
+                        chat_pb.println("Limit cannot be zero. Clearing history instead.");
                         messages = initialize_chat_messages(&tools, opts);
                     } else if messages.len() > n {
                         // Keep the last n messages. System messages might be lost if not handled.
                         // Assuming simple user/assistant history for now.
                         messages = messages.split_off(messages.len() - n);
-                        println!("Chat history limited to the last {} messages.", n);
+                        chat_pb
+                            .println(&format!("Chat history limited to the last {} messages.", n));
                     } else {
-                        println!("Chat history is already within the limit of {}.", n);
+                        chat_pb.println(&format!(
+                            "Chat history is already within the limit of {}.",
+                            n
+                        ));
                     }
                 } else {
-                    println!("Invalid number for limit: {}", parts[1]);
+                    chat_pb.println(&format!("Invalid number for limit: {}", parts[1]));
                 }
             } else {
-                println!("Usage: \\limit <number_of_messages>");
+                chat_pb.println("Usage: \\limit <number_of_messages>");
             }
             continue;
         }
@@ -1376,23 +1122,23 @@ fn chat_command(
             if parts.len() == 2 {
                 if let Ok(n) = parts[1].parse::<usize>() {
                     if n == 0 {
-                        println!("Backtrace steps must be a positive number.");
+                        chat_pb.println("Backtrace steps must be a positive number.");
                     } else if n > messages.len() {
-                        println!(
+                        chat_pb.println(&format!(
                             "Cannot go back {} steps, history has only {} messages. Clearing history.",
                             n,
                             messages.len()
-                        );
+                        ));
                         messages = initialize_chat_messages(&tools, opts);
                     } else {
                         messages.truncate(messages.len() - n);
-                        println!("Went back {} steps in chat history.", n);
+                        chat_pb.println(&format!("Went back {} steps in chat history.", n));
                     }
                 } else {
-                    println!("Invalid number for backtrace: {}", parts[1]);
+                    chat_pb.println(&format!("Invalid number for backtrace: {}", parts[1]));
                 }
             } else {
-                println!("Usage: \\backtrace <number_of_messages>");
+                chat_pb.println("Usage: \\backtrace <number_of_messages>");
             }
             continue;
         }
@@ -1400,9 +1146,9 @@ fn chat_command(
             let system_message = line.strip_prefix("\\system ").unwrap_or("").to_string();
             if !system_message.is_empty() {
                 messages.push(make_message("system", system_message));
-                println!("System message added to conversation.");
+                chat_pb.println("System message added to conversation.");
             } else {
-                println!("Usage: \\system <message>");
+                chat_pb.println("Usage: \\system <message>");
             }
             continue;
         }
@@ -1428,77 +1174,65 @@ fn chat_command(
 
         let multi_progress = global_multi_progress.clone();
 
+        let streaming_pb = multi_progress.add(ProgressBar::no_length());
+        streaming_pb.set_style(ProgressStyle::with_template("{msg}")?);
+
         let status_pb = multi_progress.add(ProgressBar::new_spinner());
         status_pb.set_style(
-            ProgressStyle::with_template("{spinner:.blue} {msg}")?
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+            ProgressStyle::with_template("{spinner:.cyan.bold} {msg:.white.bold} │ {elapsed}")?
+                .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
         );
 
-        let stream_pb = multi_progress.add(ProgressBar::new_spinner());
-        stream_pb.set_style(
-            ProgressStyle::with_template("{spinner:.green} {msg}")?.tick_strings(&[
-                "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂",
-            ]),
-        );
-
-        let is_first_chunk = Arc::new(AtomicBool::new(true));
         let tool_active = Arc::new(AtomicBool::new(false));
-        let token_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let streaming_box_state =
-            Arc::new(std::sync::Mutex::new(Option::<StreamingBoxState>::None));
-        let message_box_state = Arc::new(std::sync::Mutex::new(Option::<StreamingBoxState>::None));
+        let stream_buffer = Arc::new(std::sync::Mutex::new(String::new()));
+        let previous_status = Arc::new(std::sync::Mutex::new(Option::<(String, String)>::None));
 
-        let is_first_chunk_clone = is_first_chunk.clone();
-        let status_pb_stream_clone = status_pb.clone();
-        let stream_pb_stream_clone = stream_pb.clone();
         let status_pb_progress_clone = status_pb.clone();
-        let stream_pb_progress_clone = stream_pb.clone();
-        let streaming_box_state_clone = streaming_box_state.clone();
-        let message_box_state_clone = message_box_state.clone();
+        let streaming_pb_progress_clone = streaming_pb.clone();
         let tool_active_stream_clone = tool_active.clone();
+        let stream_buffer_clone = stream_buffer.clone();
+        let streaming_pb_clone = streaming_pb.clone();
+        let previous_status_clone = previous_status.clone();
 
         let mode = ResponseMode::Streaming {
             stream_handler: Box::new(move |chunk: &str| {
+                // Create a style for AI response content (cyan color)
+                let response_style = Style::new().cyan();
                 if chunk.is_empty() {
-                    // Finalize and clear the message box when streaming is complete
-                    if let Ok(mut state_guard) = message_box_state_clone.lock() {
-                        if let Some(_box_state) = state_guard.as_mut() {
-                            // Add a final newline to complete the box display
-                            println!();
+                    // When streaming is complete, print any remaining content and clear
+                    if let Ok(mut buffer) = stream_buffer_clone.lock() {
+                        if !buffer.is_empty() {
+                            let remaining_content = buffer.clone();
+                            streaming_pb_clone
+                                .println(response_style.apply_to(remaining_content).to_string());
+                            buffer.clear();
                         }
-                        // Clear the state for next message
-                        *state_guard = None;
                     }
+                    streaming_pb_clone.finish_and_clear();
                     return Ok(());
                 }
 
-                if is_first_chunk_clone.load(Ordering::Relaxed) {
-                    // Clear all progress bars when streaming starts
-                    status_pb_stream_clone.finish_and_clear();
-                    stream_pb_stream_clone.finish_and_clear();
-                    is_first_chunk_clone.store(false, Ordering::Relaxed);
-                }
-
-                // Don't process message content while tools are active
                 if tool_active_stream_clone.load(Ordering::Relaxed) {
                     return Ok(());
                 }
 
-                // Handle message content streaming in a box
-                if let Ok(mut state_guard) = message_box_state_clone.lock() {
-                    match state_guard.as_mut() {
-                        Some(box_state) => {
-                            // Update existing message box with new content
-                            box_state.append_content(chunk);
+                if let Ok(mut buffer) = stream_buffer_clone.lock() {
+                    buffer.push_str(chunk);
+
+                    if buffer.contains('\n') {
+                        let mut lines: Vec<&str> = buffer.split('\n').collect();
+
+                        let remaining = lines.pop().unwrap_or("").to_string();
+
+                        for line in lines {
+                            streaming_pb_clone.println(response_style.apply_to(line).to_string());
                         }
-                        None => {
-                            // Create new message streaming box
-                            let title = "💬 Assistant Response".to_string();
-                            let mut box_state = StreamingBoxState::new(title, None);
-                            box_state.start();
-                            box_state.append_content(chunk);
-                            *state_guard = Some(box_state);
-                        }
+
+                        *buffer = remaining.clone();
+                        streaming_pb_clone.set_message(remaining);
+                    } else {
+                        let current_buffer = buffer.clone();
+                        streaming_pb_clone.set_message(current_buffer);
                     }
                 }
 
@@ -1507,78 +1241,95 @@ fn chat_command(
             progress_handler: Box::new(move |progress_info: &ProgressInfo| {
                 let elapsed_secs = progress_info.elapsed_ms as f64 / 1000.0;
 
-                match &progress_info.status {
-                    StatusUpdate::ToolAccumulating { name, arguments } => {
-                        // Clear progress bars and show streaming box
-                        status_pb_progress_clone.finish_and_clear();
-                        stream_pb_progress_clone.finish_and_clear();
+                // Helper function to determine if a status is part of tool execution
+                let is_tool_status = |status_name: &str| {
+                    matches!(
+                        status_name,
+                        "ToolAccumulating" | "ToolStart" | "ToolExecuting" | "ToolComplete"
+                    )
+                };
 
-                        if let Ok(mut state_guard) = streaming_box_state_clone.lock() {
-                            match state_guard.as_mut() {
-                                Some(box_state) => {
-                                    // Update existing box with new content and timing
-                                    box_state.title =
-                                        format!("📝 Building {} call ({:.1}s)", name, elapsed_secs);
-                                    let current_len = box_state.content.len();
-                                    if arguments.len() > current_len {
-                                        let new_content = &arguments[current_len..];
-                                        box_state.append_content(new_content);
-                                    }
-                                }
-                                None => {
-                                    // Create new streaming box
-                                    let title =
-                                        format!("📝 Building {} call ({:.1}s)", name, elapsed_secs);
-                                    let mut box_state = StreamingBoxState::new(title, Some("cyan"));
-                                    box_state.start();
-                                    if !arguments.is_empty() {
-                                        box_state.append_content(arguments);
-                                    }
-                                    *state_guard = Some(box_state);
-                                }
+                // Helper function to handle status transitions with grouping
+                let print_previous_and_update = |status_name: &str, message: String| {
+                    if let Ok(mut prev_status) = previous_status_clone.lock() {
+                        if let Some((prev_name, prev_message)) = prev_status.as_ref() {
+                            // Check if the status type is different
+                            if prev_name != status_name {
+                                // Determine indentation based on whether it's a tool action
+                                let indent = if is_tool_status(prev_name) { "  " } else { "" };
+                                status_pb_progress_clone
+                                    .println(&format!("{}{}", indent, prev_message));
                             }
                         }
+                        *prev_status = Some((status_name.to_string(), message));
+                    }
+                };
+
+                match &progress_info.status {
+                    StatusUpdate::ToolAccumulating { name, arguments } => {
+                        // Print previous status and update current
+                        let message = format!("Preparing {} call", name);
+                        print_previous_and_update("ToolAccumulating", message);
+
+                        // Reset elapsed timer for new operation
+                        status_pb_progress_clone.reset_elapsed();
+
+                        // Update status bar message
+                        status_pb_progress_clone.set_message(format!("Preparing {} call", name));
+
+                        // Update streaming progress bar with tool accumulation status
+                        streaming_pb_progress_clone
+                            .set_message(format!("Preparing {}({})", name, arguments));
                     }
                     StatusUpdate::ToolStart { name, arguments } => {
+                        // Print previous status and update current
+                        let formatted_args = format_tool_arguments(arguments);
+                        let message = format!("Launching {}({})", name, formatted_args);
+                        print_previous_and_update("ToolStart", message);
+
                         // Set tool active to prevent streaming content display
                         tool_active.store(true, Ordering::Relaxed);
 
-                        // Clear the streaming box states and show final arguments
-                        if let Ok(mut state_guard) = streaming_box_state_clone.lock() {
-                            *state_guard = None;
-                        }
-                        // Don't clear message_box_state - preserve it for continued streaming
+                        // Reset elapsed timer for tool execution
+                        status_pb_progress_clone.reset_elapsed();
 
-                        // Add spacing between accumulation and execution boxes
-                        println!();
+                        // Update streaming progress bar with tool start status
+                        streaming_pb_progress_clone.set_message(format!(
+                            "Launching {}({})",
+                            name,
+                            format_tool_arguments(arguments)
+                        ));
 
-                        // Show final arguments box before execution
-                        let title = format!("🔧 Starting {} execution", name);
-                        display_streaming_box(&title, arguments, Some("yellow"));
-
-                        // Update status bar to show tool execution
+                        // Update status bar to show tool execution with elapsed time
                         status_pb_progress_clone.set_style(
-                            ProgressStyle::with_template("🔧 {spinner:.yellow} {msg}")?
-                                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+                            ProgressStyle::with_template(
+                                "{spinner:.yellow.bold} {msg:.yellow} │ {elapsed}",
+                            )?
+                            .tick_strings(&[
+                                "⠸⠂", "⠘⠄", "⠰⠁", "⢀⠃", "⡀⠇", "⠄⠏", "⠂⠟", "⠈⠟", "⠘⠯", "⠸⠽",
+                            ]),
                         );
                         let formatted_args = format_tool_arguments(arguments);
-                        status_pb_progress_clone.set_message(format!(
-                            "Running {} tool ({}) ... {:.1}s",
-                            name, formatted_args, elapsed_secs
-                        ));
+
+                        status_pb_progress_clone
+                            .set_message(format!("Executing {}({})", name, formatted_args));
                         status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
                     }
                     StatusUpdate::ToolExecuting { name, arguments } => {
-                        // Update status bar to show tool execution in progress
+                        // Print previous status and update current
+                        let message = format!("Processing {}({})", name, arguments);
+                        print_previous_and_update("ToolExecuting", message);
+
+                        // Update status bar to show tool execution in progress with elapsed time
                         status_pb_progress_clone.set_style(
-                            ProgressStyle::with_template("⚡ {spinner:.red} {msg}")?
-                                .tick_strings(&["●", "○", "◐", "◑", "◒", "◓"]),
+                            ProgressStyle::with_template(
+                                "{spinner:.red.bold} {msg:.white} │ {elapsed}",
+                            )?
+                            .tick_strings(&["⣾⣿", "⣽⣿", "⣻⣿", "⢿⣿", "⡿⣿", "⣟⣿", "⣯⣿", "⣷⣿"]),
                         );
-                        let formatted_args = format_tool_arguments(arguments);
-                        status_pb_progress_clone.set_message(format!(
-                            "Executing {} ({}) ... {:.1}s",
-                            name, formatted_args, elapsed_secs
-                        ));
+                        status_pb_progress_clone
+                            .set_message(format!("Processing {}({})", name, arguments));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
                     }
                     StatusUpdate::ToolComplete {
                         name,
@@ -1588,54 +1339,72 @@ fn chat_command(
                         let duration_secs = *duration_ms as f64 / 1000.0;
                         // Clear tool active flag to allow streaming content display again
                         tool_active.store(false, Ordering::Relaxed);
-                        // Clear status bar
-                        status_pb_progress_clone.finish_and_clear();
 
-                        // Don't clear message_box_state - preserve it for continued streaming
-
-                        // Show completion message in a box
+                        // Show completion message persistently in backlog
                         let formatted_args = format_tool_arguments(arguments);
-                        let title = format!("✅ {} completed ({:.1}s)", name, duration_secs);
-                        display_streaming_box(
-                            &title,
-                            &format!("Arguments: {}", formatted_args),
-                            Some("green"),
+                        let completion_msg = format!(
+                            "✅ {}({}) │ completed in {:.1}s",
+                            name, formatted_args, duration_secs
                         );
+                        status_pb_progress_clone.println(&completion_msg);
 
-                        // Add some spacing after the box
-                        println!();
+                        // Clear the streaming progress bar message since tool is done
+                        streaming_pb_progress_clone.set_message("");
                     }
                     StatusUpdate::Continuing => {
-                        // Update status bar to show processing
+                        // Print previous status and update current
+                        let message = "Processing response".to_string();
+                        print_previous_and_update("Continuing", message);
+
+                        // Reset elapsed timer for continuing operation
+                        status_pb_progress_clone.reset_elapsed();
+
+                        // Update status bar to show processing with elapsed time
                         status_pb_progress_clone.set_style(
-                            ProgressStyle::with_template("🔄 {spinner:.cyan} {msg}")?
-                                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+                            ProgressStyle::with_template(
+                                "{spinner:.cyan.bold} {msg:.cyan} │ {elapsed}",
+                            )?
+                            .tick_strings(&["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇", "⠏", "⠛"]),
                         );
-                        status_pb_progress_clone
-                            .set_message(format!("Processing... {:.1}s", elapsed_secs));
+                        status_pb_progress_clone.set_message("Processing response");
                         status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
                     }
                     StatusUpdate::StreamProcessing {
                         bytes_read,
                         chunks_processed,
                     } => {
-                        // Update stream progress bar with streaming data info
-                        stream_pb_progress_clone.set_style(
-                            ProgressStyle::with_template("📡 {spinner:.blue} {msg}")?.tick_strings(
-                                &[
-                                    "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄",
-                                    "▃", "▂",
-                                ],
-                            ),
+                        // Print previous status and update current
+                        let message = format!(
+                            "Streaming {} bytes, {} chunks",
+                            bytes_read, chunks_processed
                         );
-                        stream_pb_progress_clone.set_message(format!(
-                            "Streaming... {} bytes, {} chunks ({:.1}s)",
-                            bytes_read, chunks_processed, elapsed_secs
+                        print_previous_and_update("StreamProcessing", message);
+
+                        // Update status bar with streaming data info and elapsed time
+                        status_pb_progress_clone.set_style(
+                            ProgressStyle::with_template(
+                                "{spinner:.blue.bold} {msg:.blue} │ {elapsed}",
+                            )?
+                            .tick_strings(&[
+                                "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃",
+                                "▂",
+                            ]),
+                        );
+                        status_pb_progress_clone.set_message(format!(
+                            "Streaming {} bytes, {} chunks",
+                            bytes_read, chunks_processed
                         ));
-                        stream_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
                     }
                     StatusUpdate::Complete { usage } => {
-                        println!();
+                        // Print the previous status before completion
+                        if let Ok(mut prev_status) = previous_status_clone.lock() {
+                            if let Some((prev_name, prev_message)) = prev_status.take() {
+                                let indent = if is_tool_status(&prev_name) { "  " } else { "" };
+                                status_pb_progress_clone
+                                    .println(&format!("{}{}", indent, prev_message));
+                            }
+                        }
 
                         if let Some(usage) = usage {
                             let mut parts = Vec::new();
@@ -1653,58 +1422,45 @@ fn chat_command(
                             }
 
                             if !parts.is_empty() {
-                                println!(
-                                    "🎯 Complete! {} ({:.1}s)",
+                                let completion_msg = format!(
+                                    "🎯 Response complete │ {} │ {:.1}s",
                                     parts.join(" → "),
                                     elapsed_secs
                                 );
+                                status_pb_progress_clone.println(&completion_msg);
                             } else {
-                                println!("🎯 Complete! ({:.1}s)", elapsed_secs);
+                                let completion_msg =
+                                    format!("🎯 Response complete │ {:.1}s", elapsed_secs);
+                                status_pb_progress_clone.println(&completion_msg);
                             }
                         } else {
-                            println!("🎯 Complete! ({:.1}s)", elapsed_secs);
+                            let completion_msg =
+                                format!("🎯 Response complete │ {:.1}s", elapsed_secs);
+                            status_pb_progress_clone.println(&completion_msg);
                         }
                     }
                 }
 
-                // Reset first chunk flag for next stream
-                is_first_chunk.store(true, Ordering::Relaxed);
                 Ok(())
             }),
         };
 
-        // Start the thinking progress bar with timing
-        let start_time = std::time::Instant::now();
-        status_pb.set_message("Thinking...");
+        status_pb.set_message("Connecting");
         status_pb.enable_steady_tick(Duration::from_millis(100));
 
-        // Spawn a thread to update thinking progress with elapsed time and tokens
-        let thinking_pb = status_pb.clone();
-        let thinking_start = start_time.clone();
-        let thinking_token_count = token_count.clone();
-        let thinking_handle = std::thread::spawn(move || {
-            use std::sync::atomic::Ordering;
-            while !thinking_pb.is_finished() {
-                let elapsed = thinking_start.elapsed().as_secs_f64();
-                let tokens = thinking_token_count.load(Ordering::Relaxed);
-                if tokens > 0 {
-                    thinking_pb
-                        .set_message(format!("Thinking... {:.1}s • {} tokens", elapsed, tokens));
-                } else {
-                    thinking_pb.set_message(format!("Thinking... {:.1}s", elapsed));
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
+        // Create ToolContext for tool execution callbacks
+        let streaming_pb_for_context = streaming_pb.clone();
+        let tool_context = ToolContext::new(move |msg: &str| {
+            streaming_pb_for_context.println(msg);
         });
 
-        let response = post_request_with_mode(messages, &tools, &openai_opts, mode)?;
+        let response = post_request_with_mode(messages, &tools, &openai_opts, mode, &tool_context)?;
 
         // Stop the thinking update thread
         status_pb.finish_and_clear();
-        stream_pb.finish_and_clear();
-        let _ = thinking_handle.join();
+        streaming_pb.finish_and_clear();
 
-        // Clear all progress bars when done
+        // Clean up progress bars when done
         multi_progress.clear()?;
 
         // The actual response will be displayed here by the stream handler

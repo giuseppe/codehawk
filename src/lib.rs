@@ -19,3 +19,23 @@
 
 pub mod github;
 pub mod openai;
+
+// Context struct for tool execution
+pub struct ToolContext {
+    pub println: Box<dyn Fn(&str) + Send + Sync>,
+}
+
+impl ToolContext {
+    pub fn new<F>(println_fn: F) -> Self
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        Self {
+            println: Box::new(println_fn),
+        }
+    }
+
+    pub fn println(&self, msg: &str) {
+        (self.println)(msg);
+    }
+}
