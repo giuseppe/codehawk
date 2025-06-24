@@ -391,6 +391,50 @@ fn tool_github_issue_comments(
     Ok(s)
 }
 
+/// entrypoint for the github_issues tool
+fn tool_github_issues(
+    params_str: &String,
+    _ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        days: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!(
+        "Fetching GitHub issues from repository {} for the last {} days",
+        params.repo, params.days
+    );
+    let issues = get_github_issues(&params.repo, params.days)?;
+    let s = serde_json::to_string(&issues)?;
+    Ok(s)
+}
+
+/// entrypoint for the github_pull_requests tool
+fn tool_github_pull_requests(
+    params_str: &String,
+    _ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Params {
+        repo: String,
+        days: u64,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!(
+        "Fetching GitHub pull requests from repository {} for the last {} days",
+        params.repo, params.days
+    );
+    let pull_requests = get_github_pull_requests(&params.repo, params.days)?;
+    let s = serde_json::to_string(&pull_requests)?;
+    Ok(s)
+}
+
 /// entrypoint for the github_pull_request tool
 fn tool_github_pull_request(
     params_str: &String,
@@ -709,6 +753,74 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                     "required": [
                         "repo",
                         "issue"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "github_issues".to_string(),
+        tool_github_issues,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_issues",
+                "description": "Get issues from a GitHub repository that have been updated within the last specified number of days.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "days": {
+                            "type": "number",
+                            "description": "number of days to look back for updated issues"
+                        }
+                    },
+                    "required": [
+                        "repo",
+                        "days"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
+
+    append_tool(
+        &mut tools,
+        "github_pull_requests".to_string(),
+        tool_github_pull_requests,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "github_pull_requests",
+                "description": "Get pull requests from a GitHub repository that have been updated within the last specified number of days.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "github repo name, e.g. giuseppe/codehawk"
+                        },
+                        "days": {
+                            "type": "number",
+                            "description": "number of days to look back for updated pull requests"
+                        }
+                    },
+                    "required": [
+                        "repo",
+                        "days"
                     ],
                     "additionalProperties": false
                 }
