@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub struct Opts {
@@ -33,6 +34,8 @@ pub struct Opts {
     pub endpoint: String,
     pub tool_choice: Option<String>,
     pub api_key: Option<String>,
+    pub max_retries: Option<usize>,
+    pub retry_base_delay_secs: Option<u64>,
 }
 
 pub type ToolCallback = fn(&String, &crate::ToolContext) -> Result<String, Box<dyn Error>>;
@@ -489,20 +492,69 @@ fn post_request_with_mode_and_recursion(
             .timeout(Duration::from_secs(1000))
             .build()?;
 
-        let response = client
-            .post(&opts.endpoint)
-            .headers(headers)
-            .json(&request_body)
-            .send()?;
+        let max_retries = opts.max_retries.unwrap_or(5);
+        let base_delay_secs = opts.retry_base_delay_secs.unwrap_or(1);
+        let mut response = None;
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "got error code: {}: {}",
-                response.status(),
-                response.text()?
-            )
-            .into());
+        for attempt in 1..=max_retries {
+            let response_result = client
+                .post(&opts.endpoint)
+                .headers(headers.clone())
+                .json(&request_body)
+                .send();
+
+            match response_result {
+                Ok(resp) => {
+                    let status = resp.status();
+
+                    if status.is_success() {
+                        response = Some(resp);
+                        break;
+                    }
+
+                    // Retry on server errors (5xx) including 503 Service Unavailable
+                    if status.is_server_error() && attempt < max_retries {
+                        let delay_duration =
+                            Duration::from_secs(base_delay_secs * 2_u64.pow(attempt as u32 - 1));
+                        warn!(
+                            "Server error {} (attempt {}/{}). Retrying after {} seconds for endpoint: {}",
+                            status,
+                            attempt,
+                            max_retries,
+                            delay_duration.as_secs(),
+                            opts.endpoint
+                        );
+                        thread::sleep(delay_duration);
+                        continue;
+                    }
+
+                    // Non-retryable error or max retries reached
+                    let error_text = resp
+                        .text()
+                        .unwrap_or_else(|_| "Unable to read response".to_string());
+                    return Err(format!("got error code: {}: {}", status, error_text).into());
+                }
+                Err(e) => {
+                    if attempt < max_retries {
+                        let delay_duration =
+                            Duration::from_secs(base_delay_secs * 2_u64.pow(attempt as u32 - 1));
+                        warn!(
+                            "Request failed (attempt {}/{}): {}. Retrying after {} seconds for endpoint: {}",
+                            attempt,
+                            max_retries,
+                            e,
+                            delay_duration.as_secs(),
+                            opts.endpoint
+                        );
+                        thread::sleep(delay_duration);
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            }
         }
+
+        let response = response.ok_or("Max retries reached without successful response")?;
 
         let mut openai_response: OpenAIResponse = if use_streaming {
             handle_streaming_response(response, &mode)?

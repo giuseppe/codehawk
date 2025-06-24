@@ -392,10 +392,7 @@ fn tool_github_issue_comments(
 }
 
 /// entrypoint for the github_issues tool
-fn tool_github_issues(
-    params_str: &String,
-    _ctx: &ToolContext,
-) -> Result<String, Box<dyn Error>> {
+fn tool_github_issues(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     #[derive(Deserialize)]
     struct Params {
         repo: String,
@@ -927,6 +924,8 @@ fn post_request_and_print_output(
             .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
         tool_choice: opts.tool_choice.clone(),
         api_key: opts.api_key.clone(),
+        max_retries: None,
+        retry_base_delay_secs: None,
     };
 
     let tools = match opts.no_tools {
@@ -1130,6 +1129,8 @@ fn chat_command(
             .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
         tool_choice: opts.tool_choice.clone(),
         api_key: opts.api_key.clone(),
+        max_retries: None,
+        retry_base_delay_secs: None,
     };
 
     loop {
