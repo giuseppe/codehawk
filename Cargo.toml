@@ -19,6 +19,7 @@ prettytable = "0.10.0"
 indicatif = "0.17"
 indicatif-log-bridge = "0.2"
 console = "0.15"
+ctrlc = "3.4"
 
 [lib]
 crate-type = ["rlib"]

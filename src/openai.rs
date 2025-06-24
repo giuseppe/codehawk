@@ -25,8 +25,49 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Error type for when an operation is interrupted by the user (Ctrl-C)
+#[derive(Debug)]
+pub struct InterruptedError {
+    pub message: String,
+}
+
+impl std::fmt::Display for InterruptedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for InterruptedError {}
+
+impl InterruptedError {
+    pub fn new(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+        }
+    }
+}
+
+/// Check for Ctrl-C signal and return InterruptedError if found
+fn check_ctrl_c_signal(
+    ctrl_c_rx: &Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(rx) = ctrl_c_rx {
+        if let Ok(receiver) = rx.lock() {
+            if receiver.try_recv().is_ok() {
+                debug!("Received Ctrl-C signal, exiting operation");
+                return Err(
+                    Box::new(InterruptedError::new("Operation interrupted by user"))
+                        as Box<dyn Error>,
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 pub struct Opts {
     pub max_tokens: Option<u32>,
@@ -421,6 +462,7 @@ pub fn post_request(
         opts,
         ResponseMode::Complete,
         ctx,
+        None,
     )
 }
 
@@ -430,8 +472,9 @@ pub fn post_request_with_mode(
     opts: &Opts,
     mode: ResponseMode,
     ctx: &crate::ToolContext,
+    ctrl_c_rx: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
-    post_request_with_mode_and_recursion(messages, tools_collection, opts, mode, ctx)
+    post_request_with_mode_and_recursion(messages, tools_collection, opts, mode, ctx, ctrl_c_rx)
 }
 
 /// Internal function with iterative tool call handling.
@@ -441,6 +484,7 @@ fn post_request_with_mode_and_recursion(
     opts: &Opts,
     mode: ResponseMode,
     ctx: &crate::ToolContext,
+    ctrl_c_rx: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
     let start_time = Instant::now();
     let mut messages = messages;
@@ -503,6 +547,8 @@ fn post_request_with_mode_and_recursion(
                 .json(&request_body)
                 .send();
 
+            check_ctrl_c_signal(&ctrl_c_rx)?;
+
             match response_result {
                 Ok(resp) => {
                     let status = resp.status();
@@ -524,7 +570,15 @@ fn post_request_with_mode_and_recursion(
                             delay_duration.as_secs(),
                             opts.endpoint
                         );
-                        thread::sleep(delay_duration);
+                        // Check for interruption during sleep in smaller intervals
+                        let sleep_interval = Duration::from_millis(100);
+                        let mut remaining = delay_duration;
+                        while remaining > Duration::ZERO {
+                            check_ctrl_c_signal(&ctrl_c_rx)?;
+                            let sleep_time = std::cmp::min(sleep_interval, remaining);
+                            thread::sleep(sleep_time);
+                            remaining = remaining.saturating_sub(sleep_time);
+                        }
                         continue;
                     }
 
@@ -546,7 +600,15 @@ fn post_request_with_mode_and_recursion(
                             delay_duration.as_secs(),
                             opts.endpoint
                         );
-                        thread::sleep(delay_duration);
+                        // Check for interruption during sleep in smaller intervals
+                        let sleep_interval = Duration::from_millis(100);
+                        let mut remaining = delay_duration;
+                        while remaining > Duration::ZERO {
+                            check_ctrl_c_signal(&ctrl_c_rx)?;
+                            let sleep_time = std::cmp::min(sleep_interval, remaining);
+                            thread::sleep(sleep_time);
+                            remaining = remaining.saturating_sub(sleep_time);
+                        }
                         continue;
                     }
                     return Err(e.into());
@@ -557,7 +619,7 @@ fn post_request_with_mode_and_recursion(
         let response = response.ok_or("Max retries reached without successful response")?;
 
         let mut openai_response: OpenAIResponse = if use_streaming {
-            handle_streaming_response(response, &mode)?
+            handle_streaming_response(response, &mode, ctrl_c_rx.clone())?
         } else {
             let response_text = response.text()?;
             trace!("Got response {:?}", response_text);
@@ -727,6 +789,7 @@ fn post_request_with_mode_and_recursion(
 fn handle_streaming_response(
     response: reqwest::blocking::Response,
     mode: &ResponseMode,
+    ctrl_c_rx: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
 ) -> Result<OpenAIResponse, Box<dyn Error>> {
     let (stream_handler, progress_handler) = match mode {
         ResponseMode::Streaming {
@@ -746,159 +809,199 @@ fn handle_streaming_response(
     let mut chunks_processed = 0u32;
     let mut tool_accumulation_start: Option<std::time::Instant> = None;
 
-    for line in reader.lines() {
-        let line = line?;
-        bytes_read += line.len();
+    // Create a channel for line reading
+    let (line_tx, line_rx) = mpsc::channel::<Result<String, std::io::Error>>();
 
-        if line.is_empty() || !line.starts_with("data: ") {
-            continue;
-        }
-
-        let data = &line[6..]; // Remove "data: " prefix
-        chunks_processed += 1;
-
-        // Report progress every 10 chunks
-        if chunks_processed % 10 == 0 {
-            let progress_info = ProgressInfo {
-                status: StatusUpdate::StreamProcessing {
-                    bytes_read,
-                    chunks_processed,
-                },
-                elapsed_ms: 0,
-            };
-            let _ = progress_handler(&progress_info);
-        }
-
-        if data == "[DONE]" {
-            break;
-        }
-
-        let streaming_response: StreamingResponse = match serde_json::from_str(data) {
-            Ok(response) => response,
-            Err(e) => {
-                // Skip invalid JSON chunks - this is common in streaming responses
-                debug!("Skipping invalid JSON chunk: {}, data: '{}'", e, data);
-                // Report parsing issues for debugging
-                if data.len() > 10 {
-                    warn!(
-                        "Large chunk failed to parse, potential data loss: {} chars",
-                        data.len()
-                    );
+    let _reader_thread = std::thread::spawn(move || {
+        for line in reader.lines() {
+            match line {
+                Ok(line_content) => {
+                    if line_tx.send(Ok(line_content)).is_err() {
+                        break; // Receiver dropped, exit thread
+                    }
                 }
-                continue;
+                Err(e) => {
+                    let _ = line_tx.send(Err(e));
+                    break;
+                }
             }
-        };
-
-        if let Some(error) = streaming_response.error {
-            return Err(format!("Streaming API error: {}", error.message).into());
         }
+    });
 
-        if let Some(choices) = streaming_response.choices {
-            if let Some(choice) = choices.first() {
-                // Check if we have tool calls - if so, enter tool mode
-                if choice.delta.tool_calls.is_some() {
-                    in_tool_mode = true;
+    loop {
+        // Check for Ctrl-C signal first
+        check_ctrl_c_signal(&ctrl_c_rx)?;
+
+        match line_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(line)) => {
+                bytes_read += line.len();
+
+                if line.is_empty() || !line.starts_with("data: ") {
+                    continue;
                 }
 
-                if let Some(content) = &choice.delta.content {
-                    accumulated_content.push_str(content);
+                let data = &line[6..]; // Remove "data: " prefix
+                chunks_processed += 1;
 
-                    // Only call stream handler if we're not in tool mode
-                    if !in_tool_mode {
-                        stream_handler(content)?;
-                    }
+                // Report progress every 10 chunks
+                if chunks_processed % 10 == 0 {
+                    let progress_info = ProgressInfo {
+                        status: StatusUpdate::StreamProcessing {
+                            bytes_read,
+                            chunks_processed,
+                        },
+                        elapsed_ms: 0,
+                    };
+                    let _ = progress_handler(&progress_info);
                 }
 
-                if let Some(tool_calls) = &choice.delta.tool_calls {
-                    // Set accumulation start time if this is the first tool call chunk
-                    if tool_accumulation_start.is_none() {
-                        tool_accumulation_start = Some(std::time::Instant::now());
+                if data == "[DONE]" {
+                    break;
+                }
+
+                let streaming_response: StreamingResponse = match serde_json::from_str(data) {
+                    Ok(response) => response,
+                    Err(e) => {
+                        // Skip invalid JSON chunks - this is common in streaming responses
+                        debug!("Skipping invalid JSON chunk: {}, data: '{}'", e, data);
+                        // Report parsing issues for debugging
+                        if data.len() > 10 {
+                            warn!(
+                                "Large chunk failed to parse, potential data loss: {} chars",
+                                data.len()
+                            );
+                        }
+                        continue;
                     }
+                };
 
-                    for streaming_tool_call in tool_calls {
-                        let index = streaming_tool_call.index.unwrap_or(usize::MAX as u64) as usize;
+                if let Some(error) = streaming_response.error {
+                    return Err(format!("Streaming API error: {}", error.message).into());
+                }
 
-                        let updated_tool_call = match accumulated_tool_calls.get_mut(&index) {
-                            Some(existing_call) => {
-                                // Accumulate the arguments
-                                if let Some(args) = &streaming_tool_call.function.arguments {
-                                    existing_call.function.arguments.push_str(args);
-                                }
-                                // Update other fields if they have values
-                                if let Some(name) = &streaming_tool_call.function.name {
-                                    if !name.is_empty() {
-                                        existing_call.function.name = name.clone();
-                                    }
-                                }
-                                if let Some(id) = &streaming_tool_call.id {
-                                    if !id.is_empty() {
-                                        existing_call.id = id.clone();
-                                    }
-                                }
-                                if let Some(tool_type) = &streaming_tool_call.tool_type {
-                                    if !tool_type.is_empty() {
-                                        existing_call.tool_type = tool_type.clone();
-                                    }
-                                }
-                                existing_call.clone()
+                if let Some(choices) = streaming_response.choices {
+                    if let Some(choice) = choices.first() {
+                        // Check if we have tool calls - if so, enter tool mode
+                        if choice.delta.tool_calls.is_some() {
+                            in_tool_mode = true;
+                        }
+
+                        if let Some(content) = &choice.delta.content {
+                            accumulated_content.push_str(content);
+
+                            // Only call stream handler if we're not in tool mode
+                            if !in_tool_mode {
+                                stream_handler(content)?;
                             }
-                            None => {
-                                // First chunk for this tool call - convert to regular ToolCall
-                                let tool_call = ToolCall {
-                                    index: streaming_tool_call.index,
-                                    id: streaming_tool_call.id.clone().unwrap_or_default(),
-                                    tool_type: streaming_tool_call
-                                        .tool_type
-                                        .clone()
-                                        .unwrap_or("function".to_string()),
-                                    function: FunctionCall {
-                                        name: streaming_tool_call
-                                            .function
-                                            .name
-                                            .clone()
-                                            .unwrap_or_default(),
-                                        arguments: streaming_tool_call
-                                            .function
-                                            .arguments
-                                            .clone()
-                                            .unwrap_or_default(),
-                                    },
+                        }
+
+                        if let Some(tool_calls) = &choice.delta.tool_calls {
+                            // Set accumulation start time if this is the first tool call chunk
+                            if tool_accumulation_start.is_none() {
+                                tool_accumulation_start = Some(std::time::Instant::now());
+                            }
+
+                            for streaming_tool_call in tool_calls {
+                                let index =
+                                    streaming_tool_call.index.unwrap_or(usize::MAX as u64) as usize;
+
+                                let updated_tool_call = match accumulated_tool_calls.get_mut(&index)
+                                {
+                                    Some(existing_call) => {
+                                        // Accumulate the arguments
+                                        if let Some(args) = &streaming_tool_call.function.arguments
+                                        {
+                                            existing_call.function.arguments.push_str(args);
+                                        }
+                                        // Update other fields if they have values
+                                        if let Some(name) = &streaming_tool_call.function.name {
+                                            if !name.is_empty() {
+                                                existing_call.function.name = name.clone();
+                                            }
+                                        }
+                                        if let Some(id) = &streaming_tool_call.id {
+                                            if !id.is_empty() {
+                                                existing_call.id = id.clone();
+                                            }
+                                        }
+                                        if let Some(tool_type) = &streaming_tool_call.tool_type {
+                                            if !tool_type.is_empty() {
+                                                existing_call.tool_type = tool_type.clone();
+                                            }
+                                        }
+                                        existing_call.clone()
+                                    }
+                                    None => {
+                                        // First chunk for this tool call - convert to regular ToolCall
+                                        let tool_call = ToolCall {
+                                            index: streaming_tool_call.index,
+                                            id: streaming_tool_call.id.clone().unwrap_or_default(),
+                                            tool_type: streaming_tool_call
+                                                .tool_type
+                                                .clone()
+                                                .unwrap_or("function".to_string()),
+                                            function: FunctionCall {
+                                                name: streaming_tool_call
+                                                    .function
+                                                    .name
+                                                    .clone()
+                                                    .unwrap_or_default(),
+                                                arguments: streaming_tool_call
+                                                    .function
+                                                    .arguments
+                                                    .clone()
+                                                    .unwrap_or_default(),
+                                            },
+                                        };
+                                        accumulated_tool_calls.insert(index, tool_call.clone());
+                                        tool_call
+                                    }
                                 };
-                                accumulated_tool_calls.insert(index, tool_call.clone());
-                                tool_call
+
+                                // Show accumulating status if we have a progress handler
+                                if let ResponseMode::Streaming {
+                                    progress_handler, ..
+                                } = mode
+                                {
+                                    let elapsed_ms = tool_accumulation_start
+                                        .map(|start| start.elapsed().as_millis() as u64)
+                                        .unwrap_or(0);
+
+                                    let progress_info = ProgressInfo {
+                                        status: StatusUpdate::ToolAccumulating {
+                                            name: updated_tool_call.function.name.clone(),
+                                            arguments: updated_tool_call.function.arguments.clone(),
+                                        },
+                                        elapsed_ms,
+                                    };
+                                    let _ = progress_handler(&progress_info); // Don't fail on progress errors
+                                }
                             }
-                        };
+                        }
 
-                        // Show accumulating status if we have a progress handler
-                        if let ResponseMode::Streaming {
-                            progress_handler, ..
-                        } = mode
-                        {
-                            let elapsed_ms = tool_accumulation_start
-                                .map(|start| start.elapsed().as_millis() as u64)
-                                .unwrap_or(0);
-
-                            let progress_info = ProgressInfo {
-                                status: StatusUpdate::ToolAccumulating {
-                                    name: updated_tool_call.function.name.clone(),
-                                    arguments: updated_tool_call.function.arguments.clone(),
-                                },
-                                elapsed_ms,
-                            };
-                            let _ = progress_handler(&progress_info); // Don't fail on progress errors
+                        if choice.finish_reason.is_some() {
+                            finish_reason = choice.finish_reason.clone();
                         }
                     }
                 }
 
-                if choice.finish_reason.is_some() {
-                    finish_reason = choice.finish_reason.clone();
+                // Capture usage information if available in this chunk
+                if let Some(chunk_usage) = streaming_response.usage {
+                    usage = Some(chunk_usage);
                 }
             }
-        }
-
-        // Capture usage information if available in this chunk
-        if let Some(chunk_usage) = streaming_response.usage {
-            usage = Some(chunk_usage);
+            Ok(Err(e)) => {
+                // Line reading error
+                return Err(Box::new(e));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Timeout - continue checking for Ctrl-C signals
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Reader thread finished - break out of loop
+                break;
+            }
         }
     }
 

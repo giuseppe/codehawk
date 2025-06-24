@@ -38,6 +38,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use github::{
@@ -45,8 +48,9 @@ use github::{
     get_github_pull_request, get_github_pull_request_patch, get_github_pull_requests,
 };
 use openai::{
-    Message, OpenAIResponse, ProgressInfo, ResponseMode, StatusUpdate, ToolCallback, ToolItem,
-    ToolsCollection, list_models, make_message, post_request, post_request_with_mode,
+    InterruptedError, Message, OpenAIResponse, ProgressInfo, ResponseMode, StatusUpdate,
+    ToolCallback, ToolItem, ToolsCollection, list_models, make_message, post_request,
+    post_request_with_mode,
 };
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -1133,6 +1137,21 @@ fn chat_command(
         retry_base_delay_secs: None,
     };
 
+    let (ctrl_c_tx, ctrl_c_rx) = mpsc::channel();
+    let ctrl_c_rx = Arc::new(Mutex::new(ctrl_c_rx));
+
+    let signal_handler_active = Arc::new(AtomicBool::new(false));
+
+    let ctrl_c_tx_clone = ctrl_c_tx.clone();
+    let signal_handler_active_clone = signal_handler_active.clone();
+    ctrlc::set_handler(move || {
+        if signal_handler_active_clone.load(Ordering::Relaxed) {
+            debug!("Received SIGINT (Ctrl-C) - sending interrupt signal");
+            let _ = ctrl_c_tx_clone.send(());
+        }
+    })
+    .expect("Error setting up Ctrl-C handler");
+
     loop {
         // Clear any active progress bars before showing input prompt
         global_multi_progress.clear()?;
@@ -1567,7 +1586,60 @@ fn chat_command(
             streaming_pb_for_context.println(msg);
         });
 
-        let response = post_request_with_mode(messages, &tools, &openai_opts, mode, &tool_context)?;
+        // Activate signal handler for this request
+        signal_handler_active.store(true, Ordering::Relaxed);
+
+        let response = match post_request_with_mode(
+            messages.clone(),
+            &tools,
+            &openai_opts,
+            mode,
+            &tool_context,
+            Some(ctrl_c_rx.clone()),
+        ) {
+            Ok(response) => {
+                // Request completed successfully - deactivate signal handler
+                signal_handler_active.store(false, Ordering::Relaxed);
+
+                // Clear any pending signals from the channel
+                if let Ok(receiver) = ctrl_c_rx.lock() {
+                    while receiver.try_recv().is_ok() {
+                        // Drain any pending signals
+                    }
+                }
+
+                response
+            }
+            Err(e) => {
+                // Request failed - deactivate signal handler
+                signal_handler_active.store(false, Ordering::Relaxed);
+
+                // Clear any pending signals from the channel
+                if let Ok(receiver) = ctrl_c_rx.lock() {
+                    while receiver.try_recv().is_ok() {
+                        // Drain any pending signals
+                    }
+                }
+
+                // Stop the thinking update thread
+                status_pb.finish_and_clear();
+                streaming_pb.finish_and_clear();
+
+                // Clean up progress bars when done
+                multi_progress.clear()?;
+
+                // Check if this is an interruption error
+                if let Some(_interrupted) = e.downcast_ref::<InterruptedError>() {
+                    chat_pb.println(
+                        "Operation interrupted. Type your next message or \\quit to exit.",
+                    );
+                    continue; // Continue to next iteration of chat loop
+                } else {
+                    // For other errors, propagate them up
+                    return Err(e);
+                }
+            }
+        };
 
         // Stop the thinking update thread
         status_pb.finish_and_clear();
