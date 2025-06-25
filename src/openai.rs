@@ -77,6 +77,7 @@ pub struct Opts {
     pub api_key: Option<String>,
     pub max_retries: Option<usize>,
     pub retry_base_delay_secs: Option<u64>,
+    pub parameters: std::collections::HashMap<String, serde_json::Value>,
 }
 
 pub type ToolCallback = fn(&String, &crate::ToolContext) -> Result<String, Box<dyn Error>>;
@@ -167,6 +168,8 @@ pub struct OpenAIRequest {
     pub tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(flatten)]
+    pub parameters: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -529,9 +532,12 @@ fn post_request_with_mode_and_recursion(
             tools: if tools.len() > 0 { Some(tools) } else { None },
             tool_choice: tool_choice,
             stream: if use_streaming { Some(true) } else { None },
+            parameters: opts.parameters.clone(),
         };
 
-        trace!("Send request {:?}", serde_json::to_string(&request_body)?);
+        let request_json = serde_json::to_string(&request_body)?;
+        trace!("Send request: {}", request_json);
+        debug!("Request has {} custom parameters", opts.parameters.len());
 
         let client = ReqwestClient::builder()
             .timeout(Duration::from_secs(1000))

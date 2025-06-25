@@ -52,6 +52,7 @@ use openai::{
     ToolCallback, ToolItem, ToolsCollection, list_models, make_message, post_request,
     post_request_with_mode,
 };
+use std::collections::HashMap;
 
 const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-pro";
@@ -59,6 +60,51 @@ const DEFAULT_DAYS: u64 = 7;
 
 // Import ToolContext from the library crate
 use codehawk::ToolContext;
+
+/// Parse parameter strings in NAME=VALUE format into a HashMap
+fn parse_parameters(
+    param_strings: &[String],
+) -> Result<HashMap<String, serde_json::Value>, Box<dyn Error>> {
+    let mut parameters = HashMap::new();
+
+    for param in param_strings {
+        if let Some((key, value)) = param.split_once('=') {
+            let key = key.trim().to_string();
+            let value_str = value.trim();
+
+            // Try to parse as different types
+            let json_value = if let Ok(num) = value_str.parse::<f64>() {
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(num)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                )
+            } else if let Ok(bool_val) = value_str.parse::<bool>() {
+                serde_json::Value::Bool(bool_val)
+            } else if value_str == "null" {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(value_str.to_string())
+            };
+
+            debug!("Parsed parameter: {} = {:?}", key, json_value);
+            parameters.insert(key, json_value);
+        } else {
+            return Err(
+                format!("Invalid parameter format: '{}'. Expected NAME=VALUE", param).into(),
+            );
+        }
+    }
+
+    if !parameters.is_empty() {
+        debug!(
+            "Using {} custom parameters: {:?}",
+            parameters.len(),
+            parameters
+        );
+    }
+
+    Ok(parameters)
+}
 
 fn append_tool(tools: &mut ToolsCollection, name: String, callback: ToolCallback, schema: String) {
     let item = ToolItem {
@@ -929,6 +975,8 @@ fn post_request_and_print_output(
     let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
     debug!("Using model: {}", model);
 
+    let parameters = parse_parameters(&opts.parameter)?;
+
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
@@ -940,6 +988,7 @@ fn post_request_and_print_output(
         api_key: opts.api_key.clone(),
         max_retries: None,
         retry_base_delay_secs: None,
+        parameters,
     };
 
     let tools = match opts.no_tools {
@@ -1129,6 +1178,8 @@ fn chat_command(
     let model = opts.model.clone().unwrap_or(DEFAULT_MODEL.to_string());
     debug!("Using model: {}", model);
 
+    let parameters = parse_parameters(&opts.parameter)?;
+
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
@@ -1140,6 +1191,7 @@ fn chat_command(
         api_key: opts.api_key.clone(),
         max_retries: None,
         retry_base_delay_secs: None,
+        parameters,
     };
 
     let (ctrl_c_tx, ctrl_c_rx) = mpsc::channel();
@@ -1797,6 +1849,9 @@ struct Opts {
     #[clap(long)]
     /// Override the file path to read API key from
     api_key: Option<String>,
+    #[clap(long)]
+    /// Set model parameters in NAME=VALUE format (e.g., --parameter temperature=0.7 --parameter top_p=0.9)
+    parameter: Vec<String>,
 
     #[clap(subcommand)]
     command: CliCommand,

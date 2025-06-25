@@ -109,13 +109,73 @@ codehawk models
 This command fetches the list of models from `https://openrouter.ai/api/v1/models` and displays their IDs.
 
 ## Options
-You can customize the AI interaction using global options placed before the command (analyze or triage):
+You can customize the AI interaction using global options placed before the command:
 
 ```
---model <model_name>: Specify a different model available on OpenRouter (Default: google/gemini-2.5-pro-preview-03-25).
+--model <model_name>: Specify a different model available on OpenRouter (Default: google/gemini-2.5-pro).
 
 --max-tokens <number>: Set the maximum number of tokens for the AI's response (Default: 16384).
+
+--parameter <name>=<value>: Set model parameters to control AI behavior. Can be used multiple times.
 ```
+
+### Model Parameters
+
+Use `--parameter` to fine-tune the AI model's behavior. You can specify multiple parameters:
+
+```bash
+# Control creativity/randomness (0.0 = deterministic, 1.0 = very creative)
+codehawk --parameter temperature=0.7 chat
+
+# Control response diversity (nucleus sampling)
+codehawk --parameter top_p=0.9 chat
+
+# Limit token selection to top K choices
+codehawk --parameter top_k=40 chat
+
+# Reduce repetitive text
+codehawk --parameter frequency_penalty=0.3 chat
+
+# Encourage new topics/ideas
+codehawk --parameter presence_penalty=0.6 chat
+
+# Alternative repetition control
+codehawk --parameter repetition_penalty=1.1 chat
+
+# Set minimum probability threshold
+codehawk --parameter min_p=0.05 chat
+
+# Adaptive sampling
+codehawk --parameter top_a=0.2 chat
+
+# Set seed for reproducible outputs
+codehawk --parameter seed=12345 chat
+```
+
+#### Parameter Examples by Use Case
+
+**Creative Writing** (more random and diverse):
+```bash
+codehawk --parameter temperature=0.8 --parameter top_p=0.95 --parameter presence_penalty=0.6 prompt "Write a story"
+```
+
+**Code Generation** (more focused and deterministic):
+```bash
+codehawk --parameter temperature=0.2 --parameter top_p=0.9 --parameter frequency_penalty=0.1 prompt "Write a Python function"
+```
+
+**Analysis Tasks** (balanced and consistent):
+```bash
+codehawk --parameter temperature=0.3 --parameter top_p=0.8 analyze --days 7 owner/repo
+```
+
+#### Parameter Types
+- **Numbers**: `0.7`, `40`, `12345` (automatically detected)
+- **Booleans**: `true`, `false`
+- **Strings**: `"text"` or text (for non-numeric values)
+- **Null**: `null`
+
+**Note**: Parameter availability depends on the model being used. Check your model's documentation for supported parameters.
 
 ### Use a raw query
 
