@@ -257,6 +257,7 @@ pub struct StreamingResponse {
 
 #[derive(Debug, Clone)]
 pub enum StatusUpdate {
+    Thinking,
     ToolAccumulating {
         name: String,
         arguments: String,
@@ -808,6 +809,8 @@ fn handle_streaming_response(
     let mut bytes_read = 0usize;
     let mut chunks_processed = 0u32;
     let mut tool_accumulation_start: Option<std::time::Instant> = None;
+    let mut thinking_reported = false;
+    let start_time = std::time::Instant::now();
 
     // Create a channel for line reading
     let (line_tx, line_rx) = mpsc::channel::<Result<String, std::io::Error>>();
@@ -843,16 +846,8 @@ fn handle_streaming_response(
                 let data = &line[6..]; // Remove "data: " prefix
                 chunks_processed += 1;
 
-                // Report progress every 10 chunks
-                if chunks_processed % 10 == 0 {
-                    let progress_info = ProgressInfo {
-                        status: StatusUpdate::StreamProcessing {
-                            bytes_read,
-                            chunks_processed,
-                        },
-                        elapsed_ms: 0,
-                    };
-                    let _ = progress_handler(&progress_info);
+                if data == "" {
+                    continue;
                 }
 
                 if data == "[DONE]" {
@@ -881,17 +876,42 @@ fn handle_streaming_response(
 
                 if let Some(choices) = streaming_response.choices {
                     if let Some(choice) = choices.first() {
+                        // Report thinking status on first meaningful chunk
+                        if !thinking_reported {
+                            let progress_info = ProgressInfo {
+                                status: StatusUpdate::Thinking,
+                                elapsed_ms: start_time.elapsed().as_millis() as u64,
+                            };
+                            let _ = progress_handler(&progress_info);
+                            thinking_reported = true;
+                        }
+
                         // Check if we have tool calls - if so, enter tool mode
                         if choice.delta.tool_calls.is_some() {
                             in_tool_mode = true;
                         }
 
                         if let Some(content) = &choice.delta.content {
+                            if content == "" {
+                                continue;
+                            }
+
                             accumulated_content.push_str(content);
 
                             // Only call stream handler if we're not in tool mode
                             if !in_tool_mode {
                                 stream_handler(content)?;
+
+                                if chunks_processed % 10 == 0 {
+                                    let progress_info = ProgressInfo {
+                                        status: StatusUpdate::StreamProcessing {
+                                            bytes_read,
+                                            chunks_processed,
+                                        },
+                                        elapsed_ms: 0,
+                                    };
+                                    let _ = progress_handler(&progress_info);
+                                }
                             }
                         }
 

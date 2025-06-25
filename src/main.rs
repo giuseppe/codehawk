@@ -909,7 +909,10 @@ fn initialize_chat_messages(tools: &ToolsCollection, opts: &Opts) -> Vec<Message
     // Add predefined system prompts that are always loaded
     add_predefined_system_prompts(&mut messages);
 
-    add_tools_prompt(&mut messages, !tools.is_empty() && !opts.tool_choice.is_none());
+    add_tools_prompt(
+        &mut messages,
+        !tools.is_empty() && !opts.tool_choice.is_none(),
+    );
 
     debug!("Initialized chat with {} system messages", messages.len());
     messages
@@ -1384,48 +1387,94 @@ fn chat_command(
                 };
 
                 // Helper function to handle status transitions with grouping
-                let print_previous_and_update = |status_name: &str, message: String| {
+                let print_previous_and_update = |status_name: &str, message: String| -> bool {
                     if let Ok(mut prev_status) = previous_status_clone.lock() {
-                        if let Some((prev_name, prev_message)) = prev_status.as_ref() {
-                            // Check if the status type is different
-                            if prev_name != status_name {
-                                // Determine indentation based on whether it's a tool action
-                                let indent = if is_tool_status(prev_name) { "  " } else { "" };
-                                status_pb_progress_clone
-                                    .println(&format!("{}{}", indent, prev_message));
-                            }
-                        }
+                        let status_changed =
+                            if let Some((prev_name, prev_message)) = prev_status.as_ref() {
+                                if prev_name != status_name {
+                                    let indent = if is_tool_status(prev_name) { "  " } else { "" };
+                                    status_pb_progress_clone
+                                        .println(&format!("{}{}", indent, prev_message));
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                true // First status
+                            };
                         *prev_status = Some((status_name.to_string(), message));
+                        status_changed
+                    } else {
+                        true // Assume changed if we can't check
                     }
                 };
 
                 match &progress_info.status {
-                    StatusUpdate::ToolAccumulating { name, arguments } => {
+                    StatusUpdate::Thinking => {
                         // Print previous status and update current
-                        let message = format!("Preparing {} call", name);
-                        print_previous_and_update("ToolAccumulating", message);
+                        let message = "Thinking".to_string();
+                        let status_changed = print_previous_and_update("Thinking", message);
 
-                        // Reset elapsed timer for new operation
-                        status_pb_progress_clone.reset_elapsed();
+                        // Reset timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
 
-                        // Update status bar message
-                        status_pb_progress_clone.set_message(format!("Preparing {} call", name));
+                        // Update status bar to show thinking with elapsed time
+                        status_pb_progress_clone.set_style(
+                            ProgressStyle::with_template(
+                                "{spinner:.blue.bold} {msg:.blue} │ {elapsed}",
+                            )?
+                            .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
+                        );
+                        status_pb_progress_clone.set_message("Thinking");
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(150));
+                    }
+                    StatusUpdate::ToolAccumulating { name, arguments } => {
+                        // Format arguments for display, truncating if too long
+                        let formatted_args = if arguments.len() > 100 {
+                            format!("{}...", &arguments[..97])
+                        } else {
+                            arguments.clone()
+                        };
+
+                        // Print previous status and update current
+                        let message = format!("Preparing {}({})", name, formatted_args);
+                        let status_changed = print_previous_and_update("ToolAccumulating", message);
+
+                        // Reset timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
+
+                        // Update status bar with progress bar elapsed time
+                        status_pb_progress_clone.set_style(
+                            ProgressStyle::with_template(
+                                "{spinner:.cyan.bold} {msg:.white.bold} │ {elapsed}",
+                            )?
+                            .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
+                        );
+                        status_pb_progress_clone
+                            .set_message(format!("Preparing {}({})", name, formatted_args));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
 
                         // Update streaming progress bar with tool accumulation status
                         streaming_pb_progress_clone
-                            .set_message(format!("Preparing {}({})", name, arguments));
+                            .set_message(format!("Preparing {}({})", name, formatted_args));
                     }
                     StatusUpdate::ToolStart { name, arguments } => {
                         // Print previous status and update current
                         let formatted_args = format_tool_arguments(arguments);
                         let message = format!("Launching {}({})", name, formatted_args);
-                        print_previous_and_update("ToolStart", message);
+                        let status_changed = print_previous_and_update("ToolStart", message);
 
                         // Set tool active to prevent streaming content display
                         tool_active.store(true, Ordering::Relaxed);
 
-                        // Reset elapsed timer for tool execution
-                        status_pb_progress_clone.reset_elapsed();
+                        // Reset elapsed timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
 
                         // Update streaming progress bar with tool start status
                         streaming_pb_progress_clone.set_message(format!(
@@ -1452,7 +1501,12 @@ fn chat_command(
                     StatusUpdate::ToolExecuting { name, arguments } => {
                         // Print previous status and update current
                         let message = format!("Processing {}({})", name, arguments);
-                        print_previous_and_update("ToolExecuting", message);
+                        let status_changed = print_previous_and_update("ToolExecuting", message);
+
+                        // Reset elapsed timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
 
                         // Update status bar to show tool execution in progress with elapsed time
                         status_pb_progress_clone.set_style(
@@ -1488,10 +1542,12 @@ fn chat_command(
                     StatusUpdate::Continuing => {
                         // Print previous status and update current
                         let message = "Processing response".to_string();
-                        print_previous_and_update("Continuing", message);
+                        let status_changed = print_previous_and_update("Continuing", message);
 
-                        // Reset elapsed timer for continuing operation
-                        status_pb_progress_clone.reset_elapsed();
+                        // Reset elapsed timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
 
                         // Update status bar to show processing with elapsed time
                         status_pb_progress_clone.set_style(
@@ -1512,7 +1568,12 @@ fn chat_command(
                             "Streaming {} bytes, {} chunks",
                             bytes_read, chunks_processed
                         );
-                        print_previous_and_update("StreamProcessing", message);
+                        let status_changed = print_previous_and_update("StreamProcessing", message);
+
+                        // Reset elapsed timer only when changing to this status
+                        if status_changed {
+                            status_pb_progress_clone.reset_elapsed();
+                        }
 
                         // Update status bar with streaming data info and elapsed time
                         status_pb_progress_clone.set_style(
