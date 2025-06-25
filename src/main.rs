@@ -180,37 +180,130 @@ fn tool_read_file(params_str: &String, _ctx: &ToolContext) -> Result<String, Box
 }
 
 /// entrypoint for the write_file tool
-fn tool_write_file(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
+fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
+    use serde::Serialize;
+
     #[derive(Deserialize)]
     struct Params {
         path: String,
         content: String,
+        #[serde(default = "default_file_mode")]
+        mode: String,
+    }
+
+    #[derive(Serialize)]
+    struct WriteFileResult {
+        path: String,
+        bytes_written: usize,
+        mode: String,
+        created: bool,
+        message: String,
+    }
+
+    fn default_file_mode() -> String {
+        "0644".to_string()
     }
 
     let params: Params = serde_json::from_str::<Params>(&params_str)?;
 
-    debug!("Writing to file: {}", params.path);
-    let root = Root::open(".")?;
+    debug!(
+        "write_file received params: path='{}', content_length={}, mode='{}'",
+        params.path,
+        params.content.len(),
+        params.mode
+    );
 
-    if let Some(parent) = PathBuf::from(&params.path).parent() {
-        if !parent.as_os_str().is_empty() {
-            root.mkdir_all(parent, &Permissions::from_mode(0o755))?;
+    let file_mode = if params.mode.starts_with("0o") {
+        u32::from_str_radix(&params.mode[2..], 8)
+    } else if params.mode.starts_with("0") && params.mode.len() > 1 {
+        u32::from_str_radix(&params.mode[1..], 8)
+    } else {
+        if params.mode.starts_with("0x") {
+            u32::from_str_radix(&params.mode[2..], 16)
+        } else {
+            params.mode.parse::<u32>()
         }
     }
+    .map_err(|_| {
+        format!(
+            "Invalid file mode format: '{}'. Expected octal (0644, 0o644), hex (0x1a4), or decimal",
+            params.mode
+        )
+    })?;
 
-    let mut file = root
-        .open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC)
-        .or_else(|_| {
-            debug!("Creating new file: {}", params.path);
-            root.create_file(
-                &params.path,
-                OpenFlags::O_WRONLY | OpenFlags::O_CREAT,
-                &Permissions::from_mode(0o600),
-            )
-        })?;
+    debug!("Parsed file mode: {} (octal: {:o})", file_mode, file_mode);
+
+    let root = Root::open(".")?;
+    let path_buf = PathBuf::from(&params.path);
+
+    let (created, mut file) =
+        match root.open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC) {
+            Ok(file) => {
+                debug!("File '{}' already exists, will overwrite", params.path);
+                (false, file)
+            }
+            Err(e) => {
+                debug!("File '{}' does not exist ({}), will create", params.path, e);
+
+                // Create parent directories if needed
+                if let Some(parent) = path_buf.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        debug!("Creating parent directories for: {}", parent.display());
+                        root.mkdir_all(parent, &Permissions::from_mode(0o755))?;
+                        debug!("Parent directories created successfully");
+                    }
+                }
+
+                let permissions = Permissions::from_mode(file_mode);
+                debug!("Using file permissions: {:o}", permissions.mode());
+
+                let new_file = root.create_file(
+                    &params.path,
+                    OpenFlags::O_WRONLY | OpenFlags::O_CREAT,
+                    &permissions,
+                )?;
+                (true, new_file)
+            }
+        };
+
+    let bytes_written = params.content.len();
+    debug!("Writing {} bytes to file: {}", bytes_written, params.path);
 
     file.write_all(&params.content.as_bytes())?;
-    Ok("".into())
+
+    let result = WriteFileResult {
+        path: params.path.clone(),
+        bytes_written,
+        mode: format!("{:o}", file_mode),
+        created: created,
+        message: if created {
+            format!("File '{}' created successfully", params.path)
+        } else {
+            format!("File '{}' overwritten successfully", params.path)
+        },
+    };
+
+    debug!(
+        "write_file completed successfully: {} bytes written to '{}' with mode {:o}",
+        bytes_written, params.path, file_mode
+    );
+
+    // Display output using context callback
+    ctx.println(&format!("📝 {}", result.message));
+    ctx.println(&format!("   Path: {}", result.path));
+    ctx.println(&format!("   Bytes written: {}", result.bytes_written));
+    ctx.println(&format!("   File mode: {} (octal)", result.mode));
+    ctx.println(&format!(
+        "   Operation: {}",
+        if result.created {
+            "CREATE"
+        } else {
+            "OVERWRITE"
+        }
+    ));
+
+    let json_result = serde_json::to_string(&result)?;
+    Ok(json_result)
 }
 
 /// entrypoint for the list_git_files tool
@@ -663,7 +756,7 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Create or replace the content of a file stored in the repository.",
+                "description": "Create or replace the content of a file stored in the repository. Returns detailed information about the write operation including bytes written, file mode, and whether the file was created or overwritten.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -674,6 +767,11 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
                         "content": {
                             "type": "string",
                             "description": "the content of the new file"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "file permissions mode in octal format (e.g., '0644', '0755', '0600'). Defaults to '0644' for regular files. Use '0755' for executable files.",
+                            "default": "0644"
                         }
                     },
                     "required": [
@@ -925,6 +1023,7 @@ fn add_tools_prompt(messages: &mut Vec<Message>, use_tools: bool) {
     let prompts = if use_tools {
         vec![
             "Use the available tools as much as possible to find a solution.  Iterate until the problem is solved.  Terminate only when you are sure to have found the solution, if a tool fails, analyze the failure, fix the issue and call again the tool.  Never ask to run commands manually, just do it.",
+            "If you are asked to solve a problem in the code, you must use the write_file tool to store the fixed version.",
         ]
     } else {
         vec![
