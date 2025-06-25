@@ -875,9 +875,20 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
     tools
 }
 
-fn add_conservative_prompt(messages: &mut Vec<Message>) {
-    let conservative_prompt = "You are a helpful assistant.  You have access to various tools for file operations and code analysis.  Only use these tools when the user explicitly asks for file operations, code analysis, or repository interactions.  For simple questions, conversations, or general requests, respond directly without using tools.".to_string();
-    messages.push(make_message("system", conservative_prompt));
+fn add_tools_prompt(messages: &mut Vec<Message>, use_tools: bool) {
+    let prompts = if use_tools {
+        vec![
+            "Use the available tools as much as possible to find a solution.  Iterate until the problem is solved.  Terminate only when you are sure to have found the solution, if a tool fails, analyze the failure, fix the issue and call again the tool.  Never ask to run commands manually, just do it.",
+        ]
+    } else {
+        vec![
+            "You have access to various tools for file operations and code analysis.  Only use these tools when the user explicitly asks for file operations, code analysis, or repository interactions.  For simple questions, conversations, or general requests, respond directly without using tools.",
+        ]
+    };
+
+    for prompt in prompts {
+        messages.push(make_message("system", prompt.to_string()));
+    }
 }
 
 fn add_predefined_system_prompts(messages: &mut Vec<Message>) {
@@ -885,7 +896,6 @@ fn add_predefined_system_prompts(messages: &mut Vec<Message>) {
         "You are codehawk, an AI assistant that helps with software development and repository analysis.",
         "Always provide accurate, helpful responses and use available tools when appropriate for file operations or code analysis.",
         "When working with code, maintain best practices and consider security implications.",
-        "Use the available tools as much as possible to find a solution.  Iterate until the problem is solved, Terminate only when you are sure to have found the solution, if a tool fails, analyze the failure, fix the issue and call again the tool.  Never ask to run commands manually, just do it.",
     ];
 
     for prompt in predefined_prompts {
@@ -899,10 +909,7 @@ fn initialize_chat_messages(tools: &ToolsCollection, opts: &Opts) -> Vec<Message
     // Add predefined system prompts that are always loaded
     add_predefined_system_prompts(&mut messages);
 
-    // Add conservative tool usage system prompt if tools are available but no explicit choice
-    if !tools.is_empty() && opts.tool_choice.is_none() {
-        add_conservative_prompt(&mut messages);
-    }
+    add_tools_prompt(&mut messages, !tools.is_empty() && !opts.tool_choice.is_none());
 
     debug!("Initialized chat with {} system messages", messages.len());
     messages
@@ -943,12 +950,7 @@ fn post_request_and_print_output(
         }
     };
 
-    let mut messages: Vec<Message> = vec![];
-
-    // Add conservative tool usage system prompt if tools are available but no explicit choice
-    if !tools.is_empty() && opts.tool_choice.is_none() {
-        add_conservative_prompt(&mut messages);
-    }
+    let mut messages = initialize_chat_messages(&tools, opts);
 
     if let Some(ref sys_prompts) = system_prompts {
         debug!("Using {} system prompts", sys_prompts.len());
