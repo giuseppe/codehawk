@@ -1022,8 +1022,8 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
 fn add_tools_prompt(messages: &mut Vec<Message>, use_tools: bool) {
     let prompts = if use_tools {
         vec![
-            "Use the available tools as much as possible to find a solution.  Iterate until the problem is solved.  Terminate only when you are sure to have found the solution, if a tool fails, analyze the failure, fix the issue and call again the tool.  Never ask to run commands manually, just do it.",
-            "If you are asked to solve a problem in the code, you must use the write_file tool to store the fixed version.",
+            "Use the available tools as much as possible to find a solution.  Iterate until the problem is solved.  Terminate only when you are sure to have found the solution, if a tool fails, analyze the failure, fix the issue and call again the tool.  Never ask to run commands manually or ask for permissions, just run the tool.",
+            "When you've completed the task, you must terminate immediately the execution, do not explain your choices multiple times.",
         ]
     } else {
         vec![
@@ -1039,7 +1039,6 @@ fn add_tools_prompt(messages: &mut Vec<Message>, use_tools: bool) {
 fn add_predefined_system_prompts(messages: &mut Vec<Message>) {
     let predefined_prompts = vec![
         "You are codehawk, an AI assistant that helps with software development and repository analysis.",
-        "Always provide accurate, helpful responses and use available tools when appropriate for file operations or code analysis.",
         "When working with code, maintain best practices and consider security implications.",
     ];
 
@@ -1054,10 +1053,13 @@ fn initialize_chat_messages(tools: &ToolsCollection, opts: &Opts) -> Vec<Message
     // Add predefined system prompts that are always loaded
     add_predefined_system_prompts(&mut messages);
 
-    add_tools_prompt(
-        &mut messages,
-        !tools.is_empty() && !opts.tool_choice.is_none(),
-    );
+    let use_tools = !tools.is_empty()
+        && match opts.tool_choice {
+            Some(ref v) => v != "none",
+            None => true,
+        };
+
+    add_tools_prompt(&mut messages, use_tools);
 
     debug!("Initialized chat with {} system messages", messages.len());
     messages
@@ -1451,11 +1453,16 @@ fn chat_command(
         );
 
         fn format_tool_arguments(args_json: &str) -> String {
-            // Just escape special characters, no truncation needed with boxes
-            args_json
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t")
+            // Clean up whitespace and truncate for display
+            let clean_args = args_json
+                .replace('\n', " ")
+                .replace('\r', " ")
+                .replace('\t', " ");
+            if clean_args.len() > 50 {
+                format!("{}... ({})", &clean_args[..47], clean_args.len())
+            } else {
+                clean_args
+            }
         }
 
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1579,14 +1586,19 @@ fn chat_command(
                             .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
                         );
                         status_pb_progress_clone.set_message("Thinking");
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(150));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                     }
                     StatusUpdate::ToolAccumulating { name, arguments } => {
-                        // Format arguments for display, truncating if too long
-                        let formatted_args = if arguments.len() > 100 {
-                            format!("{}...", &arguments[..97])
+                        // Format arguments for display - remove newlines and truncate
+                        let clean_args = arguments
+                            .replace('\n', " ")
+                            .replace('\r', " ")
+                            .replace('\t', " ");
+
+                        let formatted_args = if clean_args.len() > 50 {
+                            format!("{} (length: {})", &clean_args[..47], clean_args.len())
                         } else {
-                            arguments.clone()
+                            clean_args
                         };
 
                         // Print previous status and update current
@@ -1607,7 +1619,7 @@ fn chat_command(
                         );
                         status_pb_progress_clone
                             .set_message(format!("Preparing {}({})", name, formatted_args));
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
 
                         // Update streaming progress bar with tool accumulation status
                         streaming_pb_progress_clone
@@ -1647,11 +1659,12 @@ fn chat_command(
 
                         status_pb_progress_clone
                             .set_message(format!("Executing {}({})", name, formatted_args));
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                     }
                     StatusUpdate::ToolExecuting { name, arguments } => {
                         // Print previous status and update current
-                        let message = format!("Processing {}({})", name, arguments);
+                        let formatted_args = format_tool_arguments(arguments);
+                        let message = format!("Processing {}({})", name, formatted_args);
                         let status_changed = print_previous_and_update("ToolExecuting", message);
 
                         // Reset elapsed timer only when changing to this status
@@ -1667,8 +1680,8 @@ fn chat_command(
                             .tick_strings(&["⣾⣿", "⣽⣿", "⣻⣿", "⢿⣿", "⡿⣿", "⣟⣿", "⣯⣿", "⣷⣿"]),
                         );
                         status_pb_progress_clone
-                            .set_message(format!("Processing {}({})", name, arguments));
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                            .set_message(format!("Processing {}({})", name, formatted_args));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                     }
                     StatusUpdate::ToolComplete {
                         name,
@@ -1708,7 +1721,7 @@ fn chat_command(
                             .tick_strings(&["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇", "⠏", "⠛"]),
                         );
                         status_pb_progress_clone.set_message("Processing response");
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                     }
                     StatusUpdate::StreamProcessing {
                         bytes_read,
@@ -1740,7 +1753,7 @@ fn chat_command(
                             "Streaming {} bytes, {} chunks",
                             bytes_read, chunks_processed
                         ));
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(100));
+                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                     }
                     StatusUpdate::Complete { usage } => {
                         // Print the previous status before completion
@@ -1792,7 +1805,7 @@ fn chat_command(
         };
 
         status_pb.set_message("Connecting");
-        status_pb.enable_steady_tick(Duration::from_millis(100));
+        status_pb.enable_steady_tick(Duration::from_millis(500));
 
         // Create ToolContext for tool execution callbacks
         let streaming_pb_for_context = streaming_pb.clone();

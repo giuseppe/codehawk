@@ -651,7 +651,7 @@ fn post_request_with_mode_and_recursion(
             .into());
         }
 
-        let mut finish: bool = false;
+        let mut finish: bool = true;
 
         if let Some(choices) = &openai_response.choices {
             trace!("Got {} choices", choices.len());
@@ -661,7 +661,6 @@ fn post_request_with_mode_and_recursion(
                     .finish_reason
                     .clone()
                     .unwrap_or_else(|| "".to_string());
-                // Ignore tool_calls finish_reason if no tools are available
                 finish = finish_reason != ""
                     && (finish_reason != "tool_calls" || tools_collection.is_empty());
                 if finish_reason == "error" {
@@ -670,22 +669,29 @@ fn post_request_with_mode_and_recursion(
                         .clone()
                         .unwrap_or_else(|| finish_reason);
                     return Err(format!("got API error: {}", native_finish_reason).into());
-                } else if finish_reason == "tool_calls" && !tools_collection.is_empty() {
+                }
+
+                // Add the complete assistant message (with both content and tool_calls if present)
+                let assistant_msg = choice.message.clone();
+                if assistant_msg.content.is_some() || assistant_msg.tool_calls.is_some() {
+                    debug!(
+                        "Adding assistant message to conversation history - content: {:?}, tool_calls: {}",
+                        assistant_msg.content.as_ref().map(|c| c.len()),
+                        assistant_msg
+                            .tool_calls
+                            .as_ref()
+                            .map(|tc| tc.len())
+                            .unwrap_or(0)
+                    );
+                    messages.push(assistant_msg);
+                }
+
+                if choice.message.tool_calls.is_some() {
                     let tool_calls = choice
                         .message
                         .tool_calls
                         .as_ref()
                         .ok_or("Invalid response")?;
-
-                    // Add the assistant tool request message
-                    let tool_request_msg = choice.message.clone();
-                    debug!(
-                        "Adding assistant tool request message with {} tool calls, current message count: {}",
-                        tool_calls.len(),
-                        messages.len()
-                    );
-                    debug!("Assistant message content: {:?}", tool_request_msg.content);
-                    messages.push(tool_request_msg);
 
                     for tool_call_request in tool_calls {
                         // Show progress for tool execution start
@@ -718,6 +724,11 @@ fn post_request_with_mode_and_recursion(
                             progress_handler(&progress_info)?;
                         }
 
+                        debug!(
+                            "Executing tool call '{}' with complete arguments (length: {})",
+                            tool_call_request.function.name,
+                            tool_call_request.function.arguments.len()
+                        );
                         let tool_start_time = start_time.elapsed();
                         let msg = tool_call(&tools_collection, tool_call_request, ctx)?;
                         let tool_duration = start_time.elapsed() - tool_start_time;
@@ -959,6 +970,11 @@ fn handle_streaming_response(
                                     }
                                     None => {
                                         // First chunk for this tool call - convert to regular ToolCall
+                                        debug!(
+                                            "Creating new tool call at index {}, streaming_tool_call.id: {:?}",
+                                            index, streaming_tool_call.id
+                                        );
+                                        // Use empty ID initially, will be filled when available or at the end
                                         let tool_call = ToolCall {
                                             index: streaming_tool_call.index,
                                             id: streaming_tool_call.id.clone().unwrap_or_default(),
@@ -979,6 +995,7 @@ fn handle_streaming_response(
                                                     .unwrap_or_default(),
                                             },
                                         };
+                                        debug!("Created tool call: {:?}", tool_call);
                                         accumulated_tool_calls.insert(index, tool_call.clone());
                                         tool_call
                                     }
@@ -1000,7 +1017,7 @@ fn handle_streaming_response(
                                         },
                                         elapsed_ms,
                                     };
-                                    let _ = progress_handler(&progress_info); // Don't fail on progress errors
+                                    let _ = progress_handler(&progress_info);
                                 }
                             }
                         }
@@ -1040,8 +1057,22 @@ fn handle_streaming_response(
     } else {
         let calls: Vec<ToolCall> = accumulated_tool_calls.into_values().collect();
 
+        debug!("Accumulated calls {:?}", calls);
+
+        // Use index as ID when actual ID is not available
+        let calls_with_ids: Vec<ToolCall> = calls
+            .into_iter()
+            .map(|mut call| {
+                if call.id.is_empty() {
+                    call.id = call.index.unwrap_or(0).to_string();
+                    debug!("Using index '{}' as ID for tool call", call.id);
+                }
+                call
+            })
+            .collect();
+
         // Validate tool calls are complete before including them
-        let valid_calls: Vec<ToolCall> = calls
+        let valid_calls: Vec<ToolCall> = calls_with_ids
             .into_iter()
             .filter(|call| {
                 if call.function.name.is_empty() {
@@ -1069,9 +1100,27 @@ fn handle_streaming_response(
             finish_reason = None;
             None
         } else {
-            let mut sorted_calls = valid_calls;
-            sorted_calls.sort_by_key(|call| call.index.unwrap_or(usize::MAX as u64));
-            Some(sorted_calls)
+            // Check for duplicate IDs and make them unique
+            let mut seen_ids = std::collections::HashSet::new();
+            let mut unique_calls: Vec<ToolCall> = valid_calls
+                .into_iter()
+                .map(|mut call| {
+                    if seen_ids.contains(&call.id) {
+                        // Make ID unique by appending the index
+                        let new_id = format!("{}_{}", call.id, call.index.unwrap_or(0));
+                        warn!(
+                            "Duplicate tool call ID '{}' found, changing to '{}'",
+                            call.id, new_id
+                        );
+                        call.id = new_id;
+                    }
+                    seen_ids.insert(call.id.clone());
+                    call
+                })
+                .collect();
+
+            unique_calls.sort_by_key(|call| call.index.unwrap_or(usize::MAX as u64));
+            Some(unique_calls)
         }
     };
 
