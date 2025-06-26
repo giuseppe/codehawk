@@ -292,7 +292,7 @@ fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box
     ctx.println(&format!("📝 {}", result.message));
     ctx.println(&format!("   Path: {}", result.path));
     ctx.println(&format!("   Bytes written: {}", result.bytes_written));
-    ctx.println(&format!("   File mode: {} (octal)", result.mode));
+    ctx.println(&format!("   File mode: {}", result.mode));
     ctx.println(&format!(
         "   Operation: {}",
         if result.created {
@@ -1540,7 +1540,7 @@ fn chat_command(
                 let is_tool_status = |status_name: &str| {
                     matches!(
                         status_name,
-                        "ToolAccumulating" | "ToolStart" | "ToolExecuting" | "ToolComplete"
+                        "ToolAccumulating" | "ToolExecuting" | "ToolComplete"
                     )
                 };
 
@@ -1549,21 +1549,14 @@ fn chat_command(
                     if let Ok(mut prev_status) = previous_status_clone.lock() {
                         let status_changed =
                             if let Some((prev_name, prev_message)) = prev_status.as_ref() {
-                                if prev_name != status_name {
-                                    let indent = if is_tool_status(prev_name) { "  " } else { "" };
-                                    status_pb_progress_clone
-                                        .println(&format!("{}{}", indent, prev_message));
-                                    true
-                                } else {
-                                    false
-                                }
+                                prev_name != status_name
                             } else {
                                 true // First status
                             };
                         *prev_status = Some((status_name.to_string(), message));
                         status_changed
                     } else {
-                        true // Assume changed if we can't check
+                        true
                     }
                 };
 
@@ -1625,44 +1618,7 @@ fn chat_command(
                         streaming_pb_progress_clone
                             .set_message(format!("Preparing {}({})", name, formatted_args));
                     }
-                    StatusUpdate::ToolStart { name, arguments } => {
-                        // Print previous status and update current
-                        let formatted_args = format_tool_arguments(arguments);
-                        let message = format!("Launching {}({})", name, formatted_args);
-                        let status_changed = print_previous_and_update("ToolStart", message);
-
-                        // Set tool active to prevent streaming content display
-                        tool_active.store(true, Ordering::Relaxed);
-
-                        // Reset elapsed timer only when changing to this status
-                        if status_changed {
-                            status_pb_progress_clone.reset_elapsed();
-                        }
-
-                        // Update streaming progress bar with tool start status
-                        streaming_pb_progress_clone.set_message(format!(
-                            "Launching {}({})",
-                            name,
-                            format_tool_arguments(arguments)
-                        ));
-
-                        // Update status bar to show tool execution with elapsed time
-                        status_pb_progress_clone.set_style(
-                            ProgressStyle::with_template(
-                                "{spinner:.yellow.bold} {msg:.yellow} │ {elapsed}",
-                            )?
-                            .tick_strings(&[
-                                "⠸⠂", "⠘⠄", "⠰⠁", "⢀⠃", "⡀⠇", "⠄⠏", "⠂⠟", "⠈⠟", "⠘⠯", "⠸⠽",
-                            ]),
-                        );
-                        let formatted_args = format_tool_arguments(arguments);
-
-                        status_pb_progress_clone
-                            .set_message(format!("Executing {}({})", name, formatted_args));
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
-                    }
                     StatusUpdate::ToolExecuting { name, arguments } => {
-                        // Print previous status and update current
                         let formatted_args = format_tool_arguments(arguments);
                         let message = format!("Processing {}({})", name, formatted_args);
                         let status_changed = print_previous_and_update("ToolExecuting", message);

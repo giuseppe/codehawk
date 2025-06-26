@@ -265,10 +265,6 @@ pub enum StatusUpdate {
         name: String,
         arguments: String,
     },
-    ToolStart {
-        name: String,
-        arguments: String,
-    },
     ToolExecuting {
         name: String,
         arguments: String,
@@ -693,22 +689,7 @@ fn post_request_with_mode_and_recursion(
                         .ok_or("Invalid response")?;
 
                     for tool_call_request in tool_calls {
-                        // Show progress for tool execution start
-                        if let ResponseMode::Streaming {
-                            progress_handler, ..
-                        } = &mode
-                        {
-                            let progress_info = ProgressInfo {
-                                status: StatusUpdate::ToolStart {
-                                    name: tool_call_request.function.name.clone(),
-                                    arguments: tool_call_request.function.arguments.clone(),
-                                },
-                                elapsed_ms: start_time.elapsed().as_millis() as u64,
-                            };
-                            progress_handler(&progress_info)?;
-                        }
-
-                        // Show progress for tool execution (actually running)
+                        // Show progress for tool execution
                         if let ResponseMode::Streaming {
                             progress_handler, ..
                         } = &mode
