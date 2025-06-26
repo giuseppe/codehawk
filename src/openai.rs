@@ -746,7 +746,6 @@ fn post_request_with_mode_and_recursion(
                 messages.len()
             );
 
-
             // Continue the loop to make another API request with the updated messages
             continue;
         }

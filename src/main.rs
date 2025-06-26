@@ -179,6 +179,102 @@ fn tool_read_file(params_str: &String, _ctx: &ToolContext) -> Result<String, Box
     Ok(json_result)
 }
 
+/// Show diff between old and new content using system diff tool with file descriptors
+fn show_diff(ctx: &ToolContext, old_content: &str, new_content: &str, file_path: &str) {
+    use std::io::Write;
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+    use std::process::Command;
+
+    // Create temporary files using O_TMPFILE in current directory
+    // Use rustix crate for system calls since it's available through pathrs
+    let old_fd_result = rustix::fs::openat(
+        rustix::fs::CWD,
+        ".",
+        rustix::fs::OFlags::TMPFILE | rustix::fs::OFlags::RDWR,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    );
+
+    let new_fd_result = rustix::fs::openat(
+        rustix::fs::CWD,
+        ".",
+        rustix::fs::OFlags::TMPFILE | rustix::fs::OFlags::RDWR,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    );
+
+    let (old_fd, new_fd) = match (old_fd_result, new_fd_result) {
+        (Ok(old), Ok(new)) => (old, new),
+        _ => {
+            debug!("Failed to create temporary file descriptors");
+            return;
+        }
+    };
+
+    // Write content to the file descriptors
+    let write_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let old_raw_fd = old_fd.as_raw_fd();
+        let new_raw_fd = new_fd.as_raw_fd();
+
+        let mut old_file = unsafe { std::fs::File::from_raw_fd(old_raw_fd) };
+        let mut new_file = unsafe { std::fs::File::from_raw_fd(new_raw_fd) };
+
+        old_file.write_all(old_content.as_bytes())?;
+        new_file.write_all(new_content.as_bytes())?;
+
+        // Reset file position to beginning for reading
+        use std::io::Seek;
+        old_file.seek(std::io::SeekFrom::Start(0))?;
+        new_file.seek(std::io::SeekFrom::Start(0))?;
+
+        // Don't let File::drop close the fds, we'll manage them manually
+        std::mem::forget(old_file);
+        std::mem::forget(new_file);
+
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        debug!("Failed to write to temporary file descriptors: {}", e);
+        return;
+    }
+
+    // Run diff command using /proc/self/fd/ paths
+    let old_path = format!("/proc/self/fd/{}", old_fd.as_raw_fd());
+    let new_path = format!("/proc/self/fd/{}", new_fd.as_raw_fd());
+
+    let diff_result = Command::new("diff")
+        .arg("--color=always")
+        .arg("-Naur")
+        .arg("--label")
+        .arg(&format!("a/{}", file_path))
+        .arg("--label")
+        .arg(&format!("b/{}", file_path))
+        .arg(&old_path)
+        .arg(&new_path)
+        .output();
+
+    // File descriptors will be automatically closed when old_fd and new_fd go out of scope
+
+    match diff_result {
+        Ok(output) => {
+            // diff returns 0 for no differences, 1 for differences, >1 for errors
+            if output.status.code() == Some(0) {
+                ctx.println("   No differences detected");
+            } else if output.status.code() == Some(1) {
+                ctx.println("   Changes:");
+                let diff_output = String::from_utf8_lossy(&output.stdout);
+                for line in diff_output.lines() {
+                    ctx.println(&format!("   {}", line));
+                }
+            } else {
+                debug!("diff command failed with status: {:?}", output.status);
+            }
+        }
+        Err(e) => {
+            debug!("Failed to run diff command: {}", e);
+        }
+    }
+}
+
 /// entrypoint for the write_file tool
 fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     use serde::Serialize;
@@ -235,6 +331,18 @@ fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box
 
     let root = Root::open(".")?;
     let path_buf = PathBuf::from(&params.path);
+
+    // Try to read existing file content for diff display
+    let existing_content = match root.open_subpath(&params.path, OpenFlags::O_RDONLY) {
+        Ok(mut file) => {
+            let mut content = Vec::new();
+            match file.read_to_end(&mut content) {
+                Ok(_) => Some(content),
+                Err(_) => None,
+            }
+        }
+        Err(_) => None,
+    };
 
     let (created, mut file) =
         match root.open_subpath(&params.path, OpenFlags::O_WRONLY | OpenFlags::O_TRUNC) {
@@ -301,6 +409,21 @@ fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box
             "OVERWRITE"
         }
     ));
+
+    // Show diff if overwriting an existing textual file
+    if !created {
+        if let Some(old_content_bytes) = existing_content {
+            if std::str::from_utf8(params.content.as_bytes()).is_ok() {
+                let old_content = String::from_utf8(old_content_bytes);
+                match old_content {
+                    Ok(old_content) => {
+                        show_diff(ctx, &old_content, &params.content, &params.path);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
 
     let json_result = serde_json::to_string(&result)?;
     Ok(json_result)
@@ -1548,7 +1671,7 @@ fn chat_command(
                 let print_previous_and_update = |status_name: &str, message: String| -> bool {
                     if let Ok(mut prev_status) = previous_status_clone.lock() {
                         let status_changed =
-                            if let Some((prev_name, prev_message)) = prev_status.as_ref() {
+                            if let Some((prev_name, _prev_message)) = prev_status.as_ref() {
                                 prev_name != status_name
                             } else {
                                 true // First status
