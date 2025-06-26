@@ -1703,26 +1703,6 @@ fn chat_command(
                         // Clear the streaming progress bar message since tool is done
                         streaming_pb_progress_clone.set_message("");
                     }
-                    StatusUpdate::Continuing => {
-                        // Print previous status and update current
-                        let message = "Processing response".to_string();
-                        let status_changed = print_previous_and_update("Continuing", message);
-
-                        // Reset elapsed timer only when changing to this status
-                        if status_changed {
-                            status_pb_progress_clone.reset_elapsed();
-                        }
-
-                        // Update status bar to show processing with elapsed time
-                        status_pb_progress_clone.set_style(
-                            ProgressStyle::with_template(
-                                "{spinner:.cyan.bold} {msg:.cyan} │ {elapsed}",
-                            )?
-                            .tick_strings(&["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇", "⠏", "⠛"]),
-                        );
-                        status_pb_progress_clone.set_message("Processing response");
-                        status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
-                    }
                     StatusUpdate::StreamProcessing {
                         bytes_read,
                         chunks_processed,

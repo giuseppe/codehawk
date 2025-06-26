@@ -282,7 +282,6 @@ pub enum StatusUpdate {
         bytes_read: usize,
         chunks_processed: u32,
     },
-    Continuing,
     Complete {
         usage: Option<Usage>,
     },
@@ -766,17 +765,6 @@ fn post_request_with_mode_and_recursion(
                 messages.len()
             );
 
-            // Show progress for continuing conversation after tool execution
-            if let ResponseMode::Streaming {
-                progress_handler, ..
-            } = &mode
-            {
-                let progress_info = ProgressInfo {
-                    status: StatusUpdate::Continuing,
-                    elapsed_ms: start_time.elapsed().as_millis() as u64,
-                };
-                progress_handler(&progress_info)?;
-            }
 
             // Continue the loop to make another API request with the updated messages
             continue;
