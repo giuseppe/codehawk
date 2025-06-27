@@ -1173,16 +1173,18 @@ fn add_predefined_system_prompts(messages: &mut Vec<Message>) {
 fn initialize_chat_messages(tools: &ToolsCollection, opts: &Opts) -> Vec<Message> {
     let mut messages: Vec<Message> = vec![];
 
-    // Add predefined system prompts that are always loaded
-    add_predefined_system_prompts(&mut messages);
+    // Add predefined system prompts unless explicitly disabled
+    if !opts.no_system_prompts {
+        add_predefined_system_prompts(&mut messages);
 
-    let use_tools = !tools.is_empty()
-        && match opts.tool_choice {
-            Some(ref v) => v != "none",
-            None => true,
-        };
+        let use_tools = !tools.is_empty()
+            && match opts.tool_choice {
+                Some(ref v) => v != "none",
+                None => true,
+            };
 
-    add_tools_prompt(&mut messages, use_tools);
+        add_tools_prompt(&mut messages, use_tools);
+    }
 
     debug!("Initialized chat with {} system messages", messages.len());
     messages
@@ -2074,6 +2076,9 @@ struct Opts {
     #[clap(long)]
     /// Set model parameters in NAME=VALUE format (e.g., --parameter temperature=0.7 --parameter top_p=0.9)
     parameter: Vec<String>,
+    #[clap(long)]
+    /// Skip adding any system prompts
+    no_system_prompts: bool,
 
     #[clap(subcommand)]
     command: CliCommand,

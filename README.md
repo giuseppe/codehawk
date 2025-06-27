@@ -117,6 +117,8 @@ You can customize the AI interaction using global options placed before the comm
 --max-tokens <number>: Set the maximum number of tokens for the AI's response (Default: 16384).
 
 --parameter <name>=<value>: Set model parameters to control AI behavior. Can be used multiple times.
+
+--no-system-prompts: Skip adding any system prompts to the conversation.
 ```
 
 ### Model Parameters
