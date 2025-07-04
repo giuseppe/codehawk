@@ -447,6 +447,153 @@ fn tool_list_git_files(_params_str: &String, _ctx: &ToolContext) -> Result<Strin
     Ok(r)
 }
 
+/// entrypoint for the fetch_web_content tool
+fn tool_fetch_web_content(
+    params_str: &String,
+    ctx: &ToolContext,
+) -> Result<String, Box<dyn Error>> {
+    use serde::Serialize;
+
+    #[derive(Deserialize)]
+    struct Params {
+        url: String,
+        #[serde(default)]
+        timeout_seconds: Option<u64>,
+        #[serde(default)]
+        follow_redirects: Option<bool>,
+        #[serde(default)]
+        max_content_length: Option<usize>,
+    }
+
+    #[derive(Serialize)]
+    struct WebContentResult {
+        url: String,
+        status_code: u16,
+        content_type: Option<String>,
+        content: String,
+        content_length: usize,
+        final_url: Option<String>,
+        headers: std::collections::HashMap<String, String>,
+    }
+
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+
+    debug!("Fetching web content from URL: {}", params.url);
+
+    // Validate URL
+    if !params.url.starts_with("http://") && !params.url.starts_with("https://") {
+        return Err("URL must start with http:// or https://".into());
+    }
+
+    let timeout_seconds = params.timeout_seconds.unwrap_or(30);
+    let follow_redirects = params.follow_redirects.unwrap_or(true);
+    let max_content_length = params.max_content_length.unwrap_or(10_000_000);
+
+    ctx.println(&format!("🌐 Fetching content from: {}", params.url));
+    ctx.println(&format!("   Timeout: {}s", timeout_seconds));
+    ctx.println(&format!("   Follow redirects: {}", follow_redirects));
+    ctx.println(&format!(
+        "   Max content length: {} bytes",
+        max_content_length
+    ));
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
+        .redirect(if follow_redirects {
+            reqwest::redirect::Policy::limited(10)
+        } else {
+            reqwest::redirect::Policy::none()
+        })
+        .user_agent("codehawk/0.1.0")
+        .build()?;
+
+    let response = client.get(&params.url).send()?;
+
+    let status_code = response.status().as_u16();
+    let final_url = if response.url().as_str() != params.url {
+        Some(response.url().to_string())
+    } else {
+        None
+    };
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Collect headers
+    let mut headers = std::collections::HashMap::new();
+    for (key, value) in response.headers() {
+        if let Ok(value_str) = value.to_str() {
+            headers.insert(key.to_string(), value_str.to_string());
+        }
+    }
+
+    let content = if response.status().is_success() {
+        let content_bytes = response.bytes()?;
+        if content_bytes.len() > max_content_length {
+            return Err(format!(
+                "Content too large: {} bytes (max: {})",
+                content_bytes.len(),
+                max_content_length
+            )
+            .into());
+        }
+
+        // Try to decode as UTF-8, fallback to lossy conversion
+        match std::str::from_utf8(&content_bytes) {
+            Ok(text) => text.to_string(),
+            Err(_) => String::from_utf8_lossy(&content_bytes).to_string(),
+        }
+    } else {
+        format!("HTTP Error: {}", response.status())
+    };
+
+    let content_length = content.len();
+
+    let result = WebContentResult {
+        url: params.url.clone(),
+        status_code,
+        content_type,
+        content: content.clone(),
+        content_length,
+        final_url,
+        headers,
+    };
+
+    // Display result using context callback
+    ctx.println(&format!("📄 Content fetched successfully"));
+    ctx.println(&format!("   Status: {}", status_code));
+    if let Some(ref ct) = result.content_type {
+        ctx.println(&format!("   Content-Type: {}", ct));
+    }
+    if let Some(ref final_url) = result.final_url {
+        ctx.println(&format!("   Final URL: {}", final_url));
+    }
+    ctx.println(&format!("   Content length: {} bytes", content_length));
+
+    // Show a preview of the content
+    let preview_lines: Vec<&str> = content.lines().take(5).collect();
+    if !preview_lines.is_empty() {
+        ctx.println("   Content preview:");
+        for line in preview_lines {
+            let truncated = if line.len() > 100 {
+                format!("{}...", &line[..97])
+            } else {
+                line.to_string()
+            };
+            ctx.println(&format!("     {}", truncated));
+        }
+        if content.lines().count() > 5 {
+            ctx.println("     ... (content truncated in preview)");
+        }
+    }
+
+    let json_result = serde_json::to_string(&result)?;
+    Ok(json_result)
+}
+
 /// entrypoint for the run_command tool
 fn tool_run_command(params_str: &String, ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
     use serde::Serialize;
@@ -1101,6 +1248,47 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
     if !unsafe_tools {
         return tools;
     }
+
+    append_tool(
+        &mut tools,
+        "fetch_web_content".to_string(),
+        tool_fetch_web_content,
+        r#"
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_web_content",
+                "description": "Fetch content from a web URL. Returns JSON with URL, status code, content type, headers, and the actual content. Supports HTTP/HTTPS URLs with configurable timeout and redirect handling.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The HTTP/HTTPS URL to fetch content from"
+                        },
+                        "timeout_seconds": {
+                            "type": "number",
+                            "description": "Request timeout in seconds (default: 30)"
+                        },
+                        "follow_redirects": {
+                            "type": "boolean",
+                            "description": "Whether to follow HTTP redirects (default: true)"
+                        },
+                        "max_content_length": {
+                            "type": "number",
+                            "description": "Maximum content length in bytes (default: 10MB)"
+                        }
+                    },
+                    "required": [
+                        "url"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+"#
+        .to_string(),
+    );
 
     append_tool(
         &mut tools,
