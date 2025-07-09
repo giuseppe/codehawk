@@ -51,6 +51,17 @@ impl InterruptedError {
     }
 }
 
+/// Normalize endpoint URL to ensure it ends with "/chat/completions"
+pub fn normalize_endpoint(endpoint: &str) -> String {
+    if endpoint.ends_with("/chat/completions") {
+        endpoint.to_string()
+    } else if endpoint.ends_with("/") {
+        format!("{}chat/completions", endpoint)
+    } else {
+        format!("{}/chat/completions", endpoint)
+    }
+}
+
 /// Check for Ctrl-C signal and return InterruptedError if found
 fn check_ctrl_c_signal(
     ctrl_c_rx: &Option<Arc<Mutex<mpsc::Receiver<()>>>>,
@@ -302,14 +313,14 @@ pub enum ResponseMode {
 pub struct ModelInfo {
     pub id: String,
     pub hugging_face_id: Option<String>,
-    pub name: String,
-    pub created: u64,
-    pub description: String,
-    pub context_length: u32,
-    pub architecture: Architecture,
-    pub pricing: Pricing,
-    pub top_provider: TopProvider,
-    pub supported_parameters: Vec<String>,
+    pub name: Option<String>,
+    pub created: Option<u64>,
+    pub description: Option<String>,
+    pub context_length: Option<u32>,
+    pub architecture: Option<Architecture>,
+    pub pricing: Option<Pricing>,
+    pub top_provider: Option<TopProvider>,
+    pub supported_parameters: Option<Vec<String>>,
 }
 
 /// Represents the architecture details of a model.
@@ -356,13 +367,26 @@ struct ModelsApiResponse {
     data: Vec<ModelInfo>,
 }
 
-/// Fetches the list of available models from OpenRouter.
-pub fn list_models() -> Result<Vec<ModelInfo>, Box<dyn Error>> {
-    debug!("Fetching list of models from {}", OPEN_ROUTER_MODELS_URL);
+/// Fetches the list of available models from the specified endpoint.
+pub fn list_models_from_endpoint(
+    endpoint: &str,
+    api_key: Option<&String>,
+) -> Result<Vec<ModelInfo>, Box<dyn Error>> {
+    debug!("Fetching list of models from {}", endpoint);
 
     let client = ReqwestClient::builder().build()?;
 
-    let response = client.get(OPEN_ROUTER_MODELS_URL).send()?;
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    // Add authentication if API key is provided or if using OpenRouter
+    if endpoint == OPEN_ROUTER_MODELS_URL || api_key.is_some() {
+        let api_key = read_api_key(api_key)?;
+        let bearer_auth = format!("Bearer {}", &api_key);
+        headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer_auth)?);
+    }
+
+    let response = client.get(endpoint).headers(headers).send()?;
 
     if !response.status().is_success() {
         let status = response.status();

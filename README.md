@@ -1,15 +1,14 @@
 # codehawk
 
-Codehawk is a tool that uses AI (via OpenRouter) to analyze and triage GitHub issues.
+Codehawk is a tool that uses AI to analyze and triage GitHub issues.
 
 ### Setup
 
-An OpenRouter API key is required. The OpenRouter API key is expected
-at the `~/.openrouter/key` path.
+An API key is required. By default, the tool uses OpenRouter and expects the API key at the `~/.openrouter/key` path.
 
 ```bash
 mkdir -p ~/.openrouter
-echo "your-openrouter-api-key" > ~/.openrouter/key
+echo "your-api-key" > ~/.openrouter/key
 ```
 
 A GitHub token can be used for authenticated requests to the GitHub API,
@@ -100,21 +99,31 @@ Within the chat session, you can use the following commands:
 
 ### List available models
 
-To list the AI models available through OpenRouter:
+To list the available AI models:
 
 ```bash
 codehawk models
 ```
 
-This command fetches the list of models from `https://openrouter.ai/api/v1/models` and displays their IDs.
+This command fetches the list of models from the default endpoint and displays their IDs, names, pricing, and supported parameters.
+
+The models command honors the `--endpoint` parameter, allowing you to list models from custom API endpoints:
+
+```bash
+codehawk --endpoint https://api.openai.com/v1 models
+```
+
+When using a custom endpoint, the command will automatically append `/models` to the endpoint URL to fetch the model list.
 
 ## Options
 You can customize the AI interaction using global options placed before the command:
 
 ```
---model <model_name>: Specify a different model available on OpenRouter (Default: google/gemini-2.5-pro).
+--model <model_name>: Specify a different AI model (Default: google/gemini-2.5-pro).
 
 --max-tokens <number>: Set the maximum number of tokens for the AI's response (Default: 16384).
+
+--endpoint <url>: Override the API endpoint URL. Automatically appends "/chat/completions" for requests.
 
 --parameter <name>=<value>: Set model parameters to control AI behavior. Can be used multiple times.
 

@@ -49,7 +49,7 @@ use github::{
 };
 use openai::{
     InterruptedError, Message, OpenAIResponse, ProgressInfo, ResponseMode, StatusUpdate,
-    ToolCallback, ToolItem, ToolsCollection, list_models, make_message, post_request,
+    ToolCallback, ToolItem, ToolsCollection, list_models_from_endpoint, make_message, post_request,
     post_request_with_mode,
 };
 use std::collections::HashMap;
@@ -1391,13 +1391,16 @@ fn post_request_and_print_output(
 
     let parameters = parse_parameters(&opts.parameter)?;
 
+    let endpoint = opts
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| OPEN_ROUTER_URL.to_string());
+    let normalized_endpoint = openai::normalize_endpoint(&endpoint);
+
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
-        endpoint: opts
-            .endpoint
-            .clone()
-            .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
+        endpoint: normalized_endpoint,
         tool_choice: opts.tool_choice.clone(),
         api_key: opts.api_key.clone(),
         max_retries: None,
@@ -2068,13 +2071,16 @@ fn chat_command(
 
     let parameters = parse_parameters(&opts.parameter)?;
 
+    let endpoint = opts
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| OPEN_ROUTER_URL.to_string());
+    let normalized_endpoint = openai::normalize_endpoint(&endpoint);
+
     let openai_opts = openai::Opts {
         max_tokens: opts.max_tokens,
         model: model,
-        endpoint: opts
-            .endpoint
-            .clone()
-            .unwrap_or_else(|| OPEN_ROUTER_URL.to_string()),
+        endpoint: normalized_endpoint,
         tool_choice: opts.tool_choice.clone(),
         api_key: opts.api_key.clone(),
         max_retries: None,
@@ -2188,13 +2194,33 @@ fn chat_command(
 // ModelInfo and ModelsApiResponse structs are removed from here.
 
 /// Handles the listing of models by calling the openai module.
-fn list_models_command(_opts: &Opts) -> Result<(), Box<dyn Error>> {
-    match list_models() {
+fn list_models_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
+    // Determine the models endpoint URL
+    let models_endpoint = if let Some(ref endpoint) = opts.endpoint {
+        // If a custom endpoint is provided, construct models URL based on it
+        if endpoint.ends_with("/chat/completions") {
+            endpoint.replace("/chat/completions", "/models")
+        } else if endpoint.ends_with("/") {
+            format!("{}models", endpoint)
+        } else {
+            format!("{}/models", endpoint)
+        }
+    } else {
+        // Default to OpenRouter models endpoint
+        "https://openrouter.ai/api/v1/models".to_string()
+    };
+
+    match list_models_from_endpoint(&models_endpoint, opts.api_key.as_ref()) {
         Ok(models) => {
             if models.is_empty() {
                 println!("No models found.");
             } else {
-                println!("Available models from OpenRouter:");
+                let source = if opts.endpoint.is_some() {
+                    "custom endpoint"
+                } else {
+                    "OpenRouter"
+                };
+                println!("Available models from {}:", source);
                 let mut table = Table::new();
                 table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
                 table.set_titles(Row::new(vec![
@@ -2207,23 +2233,34 @@ fn list_models_command(_opts: &Opts) -> Result<(), Box<dyn Error>> {
                 ]));
 
                 for model in models {
-                    let prompt_price_str = model.pricing.prompt;
-                    let completion_price_str = model.pricing.completion;
+                    let prompt_price_str = model
+                        .pricing
+                        .as_ref()
+                        .map(|p| p.prompt.as_str())
+                        .unwrap_or("N/A");
+                    let completion_price_str = model
+                        .pricing
+                        .as_ref()
+                        .map(|p| p.completion.as_str())
+                        .unwrap_or("N/A");
 
                     let prompt_price = match prompt_price_str.parse::<f64>() {
                         Ok(p) => format!("{:.6}", p),
-                        Err(_) => prompt_price_str,
+                        Err(_) => prompt_price_str.to_string(),
                     };
                     let completion_price = match completion_price_str.parse::<f64>() {
                         Ok(c) => format!("{:.6}", c),
-                        Err(_) => completion_price_str,
+                        Err(_) => completion_price_str.to_string(),
                     };
-                    let supported_parameters = model.supported_parameters.join(",");
+                    let supported_parameters = model
+                        .supported_parameters
+                        .unwrap_or_else(|| vec![])
+                        .join(",");
 
                     table.add_row(Row::new(vec![
                         Cell::new(&model.id),
-                        Cell::new(&model.name),
-                        Cell::new(&model.context_length.to_string()),
+                        Cell::new(&model.name.unwrap_or("".to_string())),
+                        Cell::new(&model.context_length.unwrap_or(0).to_string()),
                         Cell::new(&prompt_price),
                         Cell::new(&completion_price),
                         Cell::new(&supported_parameters),
