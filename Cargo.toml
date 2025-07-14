@@ -21,6 +21,7 @@ indicatif-log-bridge = "0.2"
 console = "0.15"
 ctrlc = "3.4"
 rustix = { version = "0.38", features = ["fs"] }
+glob = "0.3"
 
 [lib]
 crate-type = ["rlib"]

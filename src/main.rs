@@ -429,22 +429,53 @@ fn tool_write_file(params_str: &String, ctx: &ToolContext) -> Result<String, Box
     Ok(json_result)
 }
 
-/// entrypoint for the list_git_files tool
-fn tool_list_git_files(_params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
-    let mut cmd = Command::new("git");
-    cmd.arg("ls-files");
+/// entrypoint for the glob tool
+fn tool_glob(params_str: &String, _ctx: &ToolContext) -> Result<String, Box<dyn Error>> {
+    use serde::Deserialize;
 
-    trace!("Executing git command: {:?}", cmd);
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
-        let err: Box<dyn Error> = stderr.into();
-        return Err(err);
+    #[derive(Deserialize)]
+    struct Params {
+        pattern: String,
     }
 
-    let r = String::from_utf8(output.stdout)?;
-    debug!("Successfully listed {} files", r.lines().count());
-    Ok(r)
+    let params: Params = serde_json::from_str::<Params>(&params_str)?;
+    let glob_pattern = &params.pattern;
+
+    // Security check: reject patterns that try to escape current directory
+    if glob_pattern.contains("../") || glob_pattern.starts_with('/') {
+        return Err("Pattern cannot access parent directories or absolute paths".into());
+    }
+
+    trace!("Executing glob pattern: {}", glob_pattern);
+
+    let mut files = Vec::new();
+    for entry in glob::glob(glob_pattern)? {
+        match entry {
+            Ok(path) => {
+                // Additional security check: ensure resolved path is within current directory
+                let canonical_path = path.canonicalize().unwrap_or(path.clone());
+                let current_dir = std::env::current_dir()?;
+
+                if canonical_path.starts_with(&current_dir) {
+                    files.push(path.to_string_lossy().to_string());
+                } else {
+                    debug!("Skipping file outside current directory: {:?}", path);
+                }
+            }
+            Err(e) => {
+                debug!("Error processing glob entry: {}", e);
+            }
+        }
+    }
+
+    files.sort();
+    let result = files.join("\n");
+    debug!(
+        "Successfully matched {} files with pattern '{}'",
+        files.len(),
+        glob_pattern
+    );
+    Ok(result)
 }
 
 /// entrypoint for the fetch_web_content tool
@@ -1058,19 +1089,24 @@ fn initialize_tools(unsafe_tools: bool) -> ToolsCollection {
 
     append_tool(
         &mut tools,
-        "list_git_files".to_string(),
-        tool_list_git_files,
+        "glob".to_string(),
+        tool_glob,
         r#"
         {
             "type": "function",
             "function": {
-                "name": "list_git_files",
-                "description": "Get the list of all the files in the repository.",
+                "name": "glob",
+                "description": "Find files matching a glob pattern in the current directory. Supports patterns like '*.rs', '**/*.txt', 'src/**/*.rs', etc. Cannot access parent directories or absolute paths for security.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "The glob pattern to match files against (e.g., '*.rs', '**/*.txt', 'src/**/*.rs'). Cannot contain '../' or start with '/' for security."
+                        }
                     },
                     "required": [
+                        "pattern"
                     ],
                     "additionalProperties": false
                 }
