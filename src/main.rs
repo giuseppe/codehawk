@@ -1904,6 +1904,25 @@ fn create_response_mode(streaming_pb: ProgressBar, status_pb: ProgressBar) -> Re
                     streaming_pb_progress_clone
                         .set_message(format!("Preparing {}({})", name, formatted_args));
                 }
+                StatusUpdate::ToolStart { name, arguments } => {
+                    let formatted_args = format_tool_arguments(arguments);
+                    let message = format!("Starting {}({})", name, formatted_args);
+                    let status_changed = print_previous_and_update("ToolStart", message);
+
+                    if status_changed {
+                        status_pb_progress_clone.reset_elapsed();
+                    }
+
+                    status_pb_progress_clone.set_style(
+                        ProgressStyle::with_template(
+                            "{spinner:.yellow.bold} {msg:.white} │ {elapsed}",
+                        )?
+                        .tick_strings(&["🚀", "⚡", "✨", "🔧", "⚙️", "🛠️", "🎯", "🚀"]),
+                    );
+                    status_pb_progress_clone
+                        .set_message(format!("Starting {}({})", name, formatted_args));
+                    status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
+                }
                 StatusUpdate::ToolExecuting { name, arguments } => {
                     let formatted_args = format_tool_arguments(arguments);
                     let message = format!("Processing {}({})", name, formatted_args);
@@ -1942,10 +1961,18 @@ fn create_response_mode(streaming_pb: ProgressBar, status_pb: ProgressBar) -> Re
                 StatusUpdate::StreamProcessing {
                     bytes_read,
                     chunks_processed,
+                    latest_content,
                 } => {
+                    let content_preview = if latest_content.len() > 30 {
+                        format!("{}...", &latest_content[..27])
+                    } else {
+                        latest_content.clone()
+                    };
                     let message = format!(
-                        "Streaming {} bytes, {} chunks",
-                        bytes_read, chunks_processed
+                        "Streaming {} bytes, {} chunks - \"{}\"",
+                        bytes_read,
+                        chunks_processed,
+                        content_preview.trim()
                     );
                     let status_changed = print_previous_and_update("StreamProcessing", message);
 
@@ -1962,9 +1989,28 @@ fn create_response_mode(streaming_pb: ProgressBar, status_pb: ProgressBar) -> Re
                         ]),
                     );
                     status_pb_progress_clone.set_message(format!(
-                        "Streaming {} bytes, {} chunks",
-                        bytes_read, chunks_processed
+                        "Streaming {} bytes, {} chunks - \"{}\"",
+                        bytes_read,
+                        chunks_processed,
+                        content_preview.trim()
                     ));
+                    status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
+                }
+                StatusUpdate::Continuing => {
+                    let message = "Continuing conversation".to_string();
+                    let status_changed = print_previous_and_update("Continuing", message);
+
+                    if status_changed {
+                        status_pb_progress_clone.reset_elapsed();
+                    }
+
+                    status_pb_progress_clone.set_style(
+                        ProgressStyle::with_template(
+                            "{spinner:.magenta.bold} {msg:.white} │ {elapsed}",
+                        )?
+                        .tick_strings(&["💭", "🧠", "💡", "🔄", "🔀", "💫", "🌟", "💭"]),
+                    );
+                    status_pb_progress_clone.set_message("Continuing conversation");
                     status_pb_progress_clone.enable_steady_tick(Duration::from_millis(500));
                 }
                 StatusUpdate::Complete { usage } => {

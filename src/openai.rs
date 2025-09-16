@@ -260,6 +260,9 @@ pub struct StreamingFunctionCall {
 pub struct Delta {
     pub content: Option<String>,
     pub tool_calls: Option<Vec<StreamingToolCall>>,
+    // Add support for thinking content which might come in different fields
+    pub thinking: Option<String>,
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -276,6 +279,10 @@ pub enum StatusUpdate {
         name: String,
         arguments: String,
     },
+    ToolStart {
+        name: String,
+        arguments: String,
+    },
     ToolExecuting {
         name: String,
         arguments: String,
@@ -285,9 +292,11 @@ pub enum StatusUpdate {
         arguments: String,
         duration_ms: u64,
     },
+    Continuing,
     StreamProcessing {
         bytes_read: usize,
         chunks_processed: u32,
+        latest_content: String,
     },
     Complete {
         usage: Option<Usage>,
@@ -713,6 +722,21 @@ fn post_request_with_mode_and_recursion(
                         .ok_or("Invalid response")?;
 
                     for tool_call_request in tool_calls {
+                        // Show progress for tool start
+                        if let ResponseMode::Streaming {
+                            progress_handler, ..
+                        } = &mode
+                        {
+                            let progress_info = ProgressInfo {
+                                status: StatusUpdate::ToolStart {
+                                    name: tool_call_request.function.name.clone(),
+                                    arguments: tool_call_request.function.arguments.clone(),
+                                },
+                                elapsed_ms: start_time.elapsed().as_millis() as u64,
+                            };
+                            progress_handler(&progress_info)?;
+                        }
+
                         // Show progress for tool execution
                         if let ResponseMode::Streaming {
                             progress_handler, ..
@@ -770,6 +794,18 @@ fn post_request_with_mode_and_recursion(
                 messages.len()
             );
 
+            // Show continuing status
+            if let ResponseMode::Streaming {
+                progress_handler, ..
+            } = &mode
+            {
+                let progress_info = ProgressInfo {
+                    status: StatusUpdate::Continuing,
+                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                };
+                progress_handler(&progress_info)?;
+            }
+
             // Continue the loop to make another API request with the updated messages
             continue;
         }
@@ -814,7 +850,6 @@ fn handle_streaming_response(
     let mut accumulated_tool_calls: HashMap<usize, ToolCall> = HashMap::new();
     let mut finish_reason: Option<String> = None;
     let mut usage: Option<Usage> = None;
-    let mut in_tool_mode = false;
     let mut bytes_read = 0usize;
     let mut chunks_processed = 0u32;
     let mut tool_accumulation_start: Option<std::time::Instant> = None;
@@ -866,9 +901,7 @@ fn handle_streaming_response(
                 let streaming_response: StreamingResponse = match serde_json::from_str(data) {
                     Ok(response) => response,
                     Err(e) => {
-                        // Skip invalid JSON chunks - this is common in streaming responses
                         debug!("Skipping invalid JSON chunk: {}, data: '{}'", e, data);
-                        // Report parsing issues for debugging
                         if data.len() > 10 {
                             warn!(
                                 "Large chunk failed to parse, potential data loss: {} chars",
@@ -895,20 +928,10 @@ fn handle_streaming_response(
                             thinking_reported = true;
                         }
 
-                        // Check if we have tool calls - if so, enter tool mode
-                        if choice.delta.tool_calls.is_some() {
-                            in_tool_mode = true;
-                        }
-
+                        // Handle regular content
                         if let Some(content) = &choice.delta.content {
-                            if content == "" {
-                                continue;
-                            }
-
-                            accumulated_content.push_str(content);
-
-                            // Only call stream handler if we're not in tool mode
-                            if !in_tool_mode {
+                            if content != "" {
+                                accumulated_content.push_str(content);
                                 stream_handler(content)?;
 
                                 if chunks_processed % 10 == 0 {
@@ -916,6 +939,47 @@ fn handle_streaming_response(
                                         status: StatusUpdate::StreamProcessing {
                                             bytes_read,
                                             chunks_processed,
+                                            latest_content: content.clone(),
+                                        },
+                                        elapsed_ms: 0,
+                                    };
+                                    let _ = progress_handler(&progress_info);
+                                }
+                            }
+                        }
+
+                        // Handle thinking content (might come in a separate field)
+                        if let Some(thinking_content) = &choice.delta.thinking {
+                            if thinking_content != "" {
+                                accumulated_content.push_str(thinking_content);
+                                stream_handler(thinking_content)?;
+
+                                if chunks_processed % 10 == 0 {
+                                    let progress_info = ProgressInfo {
+                                        status: StatusUpdate::StreamProcessing {
+                                            bytes_read,
+                                            chunks_processed,
+                                            latest_content: thinking_content.clone(),
+                                        },
+                                        elapsed_ms: 0,
+                                    };
+                                    let _ = progress_handler(&progress_info);
+                                }
+                            }
+                        }
+
+                        // Handle reasoning content (used by some APIs for thinking)
+                        if let Some(reasoning_content) = &choice.delta.reasoning_content {
+                            if reasoning_content != "" {
+                                accumulated_content.push_str(reasoning_content);
+                                stream_handler(reasoning_content)?;
+
+                                if chunks_processed % 10 == 0 {
+                                    let progress_info = ProgressInfo {
+                                        status: StatusUpdate::StreamProcessing {
+                                            bytes_read,
+                                            chunks_processed,
+                                            latest_content: reasoning_content.clone(),
                                         },
                                         elapsed_ms: 0,
                                     };
