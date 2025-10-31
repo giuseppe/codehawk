@@ -4,12 +4,7 @@ Codehawk is a tool that uses AI to analyze and triage GitHub issues.
 
 ### Setup
 
-An API key is required. By default, the tool uses OpenRouter and expects the API key at the `~/.openrouter/key` path.
-
-```bash
-mkdir -p ~/.openrouter
-echo "your-api-key" > ~/.openrouter/key
-```
+By default, the tool uses `http://localhost:8080` as the API endpoint. You can override this using the `--endpoint` option. If the endpoint requires authentication, provide an API key file using the `--api-key` option.
 
 A GitHub token can be used for authenticated requests to the GitHub API,
 which can help avoid rate limiting. If you have a personal access token,
@@ -29,8 +24,9 @@ To get an AI-generated summary of issues and pull requests created or updated in
 more repositories within a specific timeframe (defaulting to the last 7 days):
 
 ```bash
-codehawk analyze [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
+codehawk [--endpoint <api_endpoint>] analyze [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
 
+--endpoint <api_endpoint>: Optional. API endpoint URL. Defaults to http://localhost:8080.
 --days <number_of_days>: Optional. Specifies the number of past days to fetch issues and pull requests from. Defaults to 7.
 
 <owner/repo>: The GitHub repository path(s) (e.g., rust-lang/rust). You can specify multiple repositories.
@@ -40,7 +36,7 @@ codehawk analyze [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
 codehawk analyze --days 14 owner1/repoA owner2/repoB
 ```
 
-Example: Analyze issues and pull requests in `my-org/my-project` from the last 7 days (using default):
+Example: Analyze issues and pull requests in `my-org/my-project` from the last 7 days:
 
 ```
 codehawk analyze my-org/my-project
@@ -51,8 +47,9 @@ codehawk analyze my-org/my-project
 To get an AI-generated prioritization of issues and pull requests for more repositories within a specific timeframe (defaulting to the last 7 days):
 
 ```bash
-codehawk prioritize [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
+codehawk [--endpoint <api_endpoint>] prioritize [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
 
+--endpoint <api_endpoint>: Optional. API endpoint URL. Defaults to http://localhost:8080.
 --days <number_of_days>: Optional. Specifies the number of past days to fetch issues and pull requests from. Defaults to 7.
 
 <owner/repo>: The GitHub repository path(s) (e.g., rust-lang/rust). You can specify multiple repositories.
@@ -62,7 +59,7 @@ codehawk prioritize [--days <number_of_days>] <owner/repo> [<owner/repo> ...]
 codehawk prioritize --days 14 owner1/repoA owner2/repoB
 ```
 
-Example: Prioritize issues and pull requests in `my-org/my-project` from the last 7 days (using default):
+Example: Prioritize issues and pull requests in `my-org/my-project` from the last 7 days:
 
 ```
 codehawk prioritize my-org/my-project
@@ -105,7 +102,7 @@ To list the available AI models:
 codehawk models
 ```
 
-This command fetches the list of models from the default endpoint and displays their IDs, names, pricing, and supported parameters.
+This command fetches the list of models from the configured endpoint (defaults to localhost:8080) and displays their IDs, names, pricing, and supported parameters.
 
 The models command honors the `--endpoint` parameter, allowing you to list models from custom API endpoints:
 

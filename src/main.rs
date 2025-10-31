@@ -54,7 +54,7 @@ use openai::{
 };
 use std::collections::HashMap;
 
-const OPEN_ROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_ENDPOINT: &str = "http://localhost:8080";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-pro";
 const DEFAULT_DAYS: u64 = 7;
 
@@ -1430,7 +1430,7 @@ fn post_request_and_print_output(
     let endpoint = opts
         .endpoint
         .clone()
-        .unwrap_or_else(|| OPEN_ROUTER_URL.to_string());
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     let normalized_endpoint = openai::normalize_endpoint(&endpoint);
 
     let openai_opts = openai::Opts {
@@ -2156,7 +2156,7 @@ fn chat_command(
     let endpoint = opts
         .endpoint
         .clone()
-        .unwrap_or_else(|| OPEN_ROUTER_URL.to_string());
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     let normalized_endpoint = openai::normalize_endpoint(&endpoint);
 
     let openai_opts = openai::Opts {
@@ -2277,19 +2277,17 @@ fn chat_command(
 
 /// Handles the listing of models by calling the openai module.
 fn list_models_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
-    // Determine the models endpoint URL
-    let models_endpoint = if let Some(ref endpoint) = opts.endpoint {
-        // If a custom endpoint is provided, construct models URL based on it
-        if endpoint.ends_with("/chat/completions") {
-            endpoint.replace("/chat/completions", "/models")
-        } else if endpoint.ends_with("/") {
-            format!("{}models", endpoint)
-        } else {
-            format!("{}/models", endpoint)
-        }
+    let base_endpoint = opts
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+
+    let models_endpoint = if base_endpoint.ends_with("/chat/completions") {
+        base_endpoint.replace("/chat/completions", "/models")
+    } else if base_endpoint.ends_with("/") {
+        format!("{}models", base_endpoint)
     } else {
-        // Default to OpenRouter models endpoint
-        "https://openrouter.ai/api/v1/models".to_string()
+        format!("{}/models", base_endpoint)
     };
 
     match list_models_from_endpoint(&models_endpoint, opts.api_key.as_ref()) {
@@ -2300,7 +2298,7 @@ fn list_models_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
                 let source = if opts.endpoint.is_some() {
                     "custom endpoint"
                 } else {
-                    "OpenRouter"
+                    "default endpoint"
                 };
                 println!("Available models from {}:", source);
                 let mut table = Table::new();
@@ -2439,7 +2437,7 @@ enum CliCommand {
     /// Interactive session
     Chat {},
 
-    /// List available models from OpenRouter
+    /// List available models from the configured endpoint
     Models {},
 }
 
