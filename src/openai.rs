@@ -97,7 +97,6 @@ pub struct ToolItem {
     pub schema: String,
 }
 
-const MAX_TOKENS: u32 = 16384;
 
 /// Reads the API key from the specified file path.
 fn read_api_key(api_key_file: &String) -> Result<String, Box<dyn Error>> {
@@ -164,7 +163,8 @@ pub struct ToolCall {
 #[derive(Serialize, Debug)]
 pub struct OpenAIRequest {
     pub model: String,
-    pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     pub messages: Vec<Message>,
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -543,7 +543,7 @@ fn post_request_with_mode_and_recursion(
 
         let request_body = OpenAIRequest {
             model: opts.model.clone(),
-            max_tokens: opts.max_tokens.unwrap_or_else(|| MAX_TOKENS),
+            max_tokens: opts.max_tokens,
             messages: messages.clone(),
             tools: if tools.len() > 0 { Some(tools) } else { None },
             tool_choice: tool_choice,
