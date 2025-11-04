@@ -29,7 +29,7 @@ use log::{debug, trace, warn};
 use pathrs::{Root, flags::OpenFlags};
 use prettytable::{Cell, Row, Table, format};
 use rustyline::DefaultEditor;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::fs::Permissions;
@@ -60,6 +60,7 @@ const DEFAULT_DAYS: u64 = 7;
 
 // Import ToolContext from the library crate
 use codehawk::ToolContext;
+
 
 /// Parse parameter strings in NAME=VALUE format into a HashMap
 fn parse_parameters(
@@ -2354,9 +2355,26 @@ fn list_models_command(opts: &Opts) -> Result<(), Box<dyn Error>> {
     }
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize, Deserialize)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
+#[serde(default)]
 struct Opts {
+    #[clap(short = 'c', long = "config")]
+    #[serde(skip)]
+    /// Path to JSON configuration file
+    ///
+    /// If not specified, will automatically use 'config.json'
+    /// from current directory if it exists.
+    ///
+    /// Example config file:
+    /// {
+    ///   "model": "granite",
+    ///   "api_key": "~/.path/to/key",
+    ///   "parameters": ["temperature=0.7"]
+    /// }
+    ///
+    /// CLI arguments override config file values.
+    config: Option<String>,
     #[clap(short, long)]
     /// Override the maximum number of tokens to generate
     max_tokens: Option<u32>,
@@ -2386,10 +2404,94 @@ struct Opts {
     no_system_prompts: bool,
 
     #[clap(subcommand)]
+    #[serde(skip)]
     command: CliCommand,
 
     #[clap()]
+    #[serde(skip)]
     args: Vec<String>,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Self {
+            config: None,
+            max_tokens: None,
+            model: None,
+            endpoint: None,
+            no_tools: false,
+            unsafe_tools: false,
+            tool_choice: None,
+            api_key: None,
+            parameter: Vec::new(),
+            no_system_prompts: false,
+            command: CliCommand::Chat {},
+            args: Vec::new(),
+        }
+    }
+}
+
+impl Opts {
+    /// Load configuration from a JSON file
+    fn load_from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        debug!("Loading configuration from file: {}", path);
+
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file '{}': {}", path, e))?;
+
+        let config: Opts = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse config file '{}': {}", path, e))?;
+
+        debug!("Successfully loaded configuration from {}", path);
+        Ok(config)
+    }
+
+    /// Merge this config with CLI options, giving precedence to CLI options
+    fn merge_with_config(&mut self, config: Opts) {
+        debug!("Merging configuration file with CLI options");
+
+        // Only use config values if CLI didn't provide them
+        if self.max_tokens.is_none() {
+            self.max_tokens = config.max_tokens;
+        }
+
+        if self.model.is_none() {
+            self.model = config.model;
+        }
+
+        if self.endpoint.is_none() {
+            self.endpoint = config.endpoint;
+        }
+
+        if !self.no_tools && config.no_tools {
+            self.no_tools = true;
+        }
+
+        if !self.unsafe_tools && config.unsafe_tools {
+            self.unsafe_tools = true;
+        }
+
+        if self.tool_choice.is_none() {
+            self.tool_choice = config.tool_choice;
+        }
+
+        if self.api_key.is_none() {
+            self.api_key = config.api_key;
+        }
+
+        // Merge parameters - config parameters are added first, then CLI parameters
+        if !config.parameter.is_empty() {
+            let mut merged_params = config.parameter;
+            merged_params.extend(self.parameter.clone());
+            self.parameter = merged_params;
+        }
+
+        if !self.no_system_prompts && config.no_system_prompts {
+            self.no_system_prompts = true;
+        }
+
+        debug!("Configuration merge completed");
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -2455,6 +2557,33 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Parse command line arguments
     let mut opts = Opts::parse();
     debug!("Command line options parsed");
+
+    // Load and merge configuration file
+    let config_path = match &opts.config {
+        Some(path) => Some(path.clone()),
+        None => {
+            // Check for default config.json in current directory
+            let default_config = "config.json";
+            if std::path::Path::new(default_config).exists() {
+                debug!("Found default config file: {}", default_config);
+                Some(default_config.to_string())
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(config_file) = config_path {
+        match Opts::load_from_file(&config_file) {
+            Ok(config) => {
+                debug!("Loaded configuration file: {}", config_file);
+                opts.merge_with_config(config);
+            }
+            Err(e) => {
+                return Err(format!("Configuration file error: {}", e).into());
+            }
+        }
+    }
 
     // Reset the model to use if an endpoint was provided
     if opts.model.is_none() && opts.endpoint.is_some() {
